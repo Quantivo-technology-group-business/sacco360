@@ -128,8 +128,18 @@ The import also bypasses `GroupService::addMember()`, so it additionally skips:
 - `rebuildUpcomingSchedule()` — an imported `merry_go_round` group ends up with **members but zero cycles**
 - the duplicate-membership exception path (it falls back to a per-row `exists` check instead)
 
-### A8. Chama is invisible on the Dashlite theme
-All 6 portal chama views and all 4 admin group views exist **only** under `themes/adminlte/`. Under `theme_view()`, a dashlite install falls back to `sacco::group.index` → `Modules/Sacco/Resources/views/group/index.blade.php`, which does not exist → `ViewNotFoundException`. See C9 — the theme situation is worse than this.
+### A8. Chama is invisible on the Dashlite theme — ⬇️ RECLASSIFIED: not a P0, see G11
+All 6 portal chama views and all 4 admin group views exist **only** under `themes/adminlte/`. Under `theme_view()`, a dashlite install falls back to `sacco::group.index` → `Modules/Sacco/Resources/views/group/index.blade.php`, which does not exist → `ViewNotFoundException`.
+
+> **This was over-stated, and fixing it as scoped would achieve nothing.** The original framing implies that adding 10 dashlite views would make chama work on that theme. It would not, because **dashlite cannot be activated and has no layouts**:
+>
+> - `ThemeController::index()` builds its list from `base_path('themes')` directories that contain a `theme.json`. The root `themes/` directory contains **only `adminlte`** — there is no `themes/dashlite/` at all, so dashlite never appears in the switcher and cannot be activated.
+> - The `core.active_theme` setting is seeded with `'displayed' => '0'`, so it is not editable through the settings UI either. The only way to reach dashlite is a manual database edit.
+> - Even then it would not boot. `CoreServiceProvider` runs `loadViewsFrom(base_path("themes/{$theme}/views"), 'core')`, and `themes/dashlite/views` does not exist. Every chama view `@extends('core::layouts.master')`, and that layout exists **only** at `themes/adminlte/views/layouts/master.blade.php` — there is no unthemed `Modules/Core/Resources/views/layouts/` and no dashlite `master.blade.php` anywhere in the repository. So a forced dashlite install fails on the *layout* of every admin page, not on chama.
+>
+> The real gap is a whole-theme port, and it is concentrated in this module: **Sacco has 146 adminlte views against 23 dashlite** (the worst ratio of any module; the app overall is 631 vs 475). Writing the 10 chama views would move Sacco from 23 to 33 dashlite views and still leave the theme unactivatable, layout-less, and ~113 Sacco views short.
+>
+> Moved to C9 and to P3 of the roadmap. Recorded here rather than silently dropped, because it was originally listed as P0 item 8.
 
 ---
 
@@ -303,6 +313,10 @@ Contains `"Nice": true` with no `Modules/Nice/` directory, and both `"Share": tr
 
 Decide: delete dashlite (389 dead files) or finish it (157 missing views + a root theme). The current state is dead weight plus a latent crash source.
 
+Raw file counts measured 2026-10-14 corroborate the view-path analysis: **631 adminlte views vs 475 dashlite** app-wide, and the deficit is overwhelmingly in this module — **Sacco 146 vs 23**, Portal 80 vs 75, Loan 81 vs 76, Payroll 25 vs 18. Note also that `Modules/Core/Resources/views/layouts/` does not exist: `core::layouts.master` resolves *only* from `themes/adminlte/views/layouts/master.blade.php`, which is why a forced dashlite install fails on every page's layout rather than merely on the views it lacks.
+
+**A8 (chama views missing on dashlite) is a subset of this, not a separate P0** — see G11 for why it was reclassified rather than implemented.
+
 ### C10. `ulm.sql` predates the Sacco module (P2)
 The 446 KB / 114-table dump contains **no `sacco_*` tables**. `deploy.sh` restores the dump and then runs migrations, so a fresh install depends on ~40 Sacco migrations applying cleanly on top of a legacy schema. There is no CI to prove this. Combined with the `hasColumn`/`hasTable` guards scattered through those migrations, first-run failure is likely and invisible.
 
@@ -350,6 +364,24 @@ Recorded so the roadmap does not duplicate existing capability.
 ## PART F — Prioritized roadmap
 
 ### P0 — Stop the bleeding ✅ DONE — see Part G
+
+> **Note on numbering.** This P0 task list and the Part A defect list are *not* the same eight things. Part A enumerates the eight broken chama code paths (A1–A8); the list below enumerates eight pieces of work, which cover A1, A2, A3, A5, A6 plus the platform-secret item (D) and the copy-paste bugs (C6), and it folds A7 in as item 8. **A4 and A8 were never in this list** — A4 was scoped as P1 item 9 and A8 as P2 item 29.
+>
+> Status of the Part A defects themselves, which is the more useful measure:
+>
+> | Defect | Status | Where |
+> |--------|--------|-------|
+> | A1 M-Pesa push path | ✅ fixed | G1 |
+> | A2 no approval queue | ✅ fixed | G2 |
+> | A3 out-of-enum `paid` | ✅ fixed | G3 |
+> | A4 flat late penalty | ✅ fixed | G10 — delivered ahead of its P1 slot |
+> | A5 unguarded actions | ✅ fixed | G4 |
+> | A6 meeting leak | ✅ fixed | G5 |
+> | A7 import corrupts membership | ✅ fixed | G6 |
+> | A8 dashlite chama views | ⬇️ reclassified | G11 — not a P0; see C9 |
+>
+> **7 of 8 Part A defects fixed; A8 reclassified as dead-code cleanup.** A4 was pulled forward from P1 because it turned out to be money-integrity work, not a feature: it was also the only reason `fixed`/`random` groups could never close a turn.
+
 1. **Implement `MpesaStkService::pushGroupContribution()`** and a matching C2B/STK callback branch that flips the contribution to `posted` and credits the member. (A1)
 2. **Add the pending-contribution approval queue**: `GroupController@contributions` becomes a DataTable with approve / reject / reverse actions, guarded by a new `sacco.groups.approve` permission. (A2)
 3. **Fix the enum**: migration to `enum('upcoming','active','completed','skipped','paid')` — or change `disburseCycle()` to write `completed` and track disbursement via `disbursed_at`. Then the re-disbursement guard works. (A3)
@@ -383,7 +415,7 @@ Recorded so the roadmap does not duplicate existing capability.
 26. **Chama API + USSD**: group endpoints under `api/v1/sacco/groups`, and USSD menu items 7 (My Chama) and 8 (Contribute to Chama) with a `group.menu.ts` handler. (B14)
 27. **Data import for groups**: members, contribution history, current rotation position. (B16)
 28. **Loan restructuring**: arrears capitalisation, product conversion, top-up netting; **collateral recovery**: repossession → sale → apply recovery; **estate workflow**: document gating, beneficiary apportionment, estate account. (C3, C4, C5)
-29. **Resolve the theme question**: delete `themes/dashlite` (389 files) or build the root dashlite theme plus the 157 missing views. (C9, A8)
+29. **Resolve the theme question** — ⬇️ **absorbs the former P0 item 8; see G11 for why it was reclassified.** Either delete the 389 dead `themes/dashlite` module views, or commit to a real port: a root `themes/dashlite/` with `theme.json` and `views/layouts/master.blade.php` (without which nothing renders, since `core::layouts.master` currently resolves only from adminlte), plus the 157 adminlte-only view paths — 123 of them in Sacco alone. Building just the 10 chama views achieves nothing on its own. (C9, A8)
 30. **CI**: GitHub Actions running `composer install`, `php artisan migrate` against MySQL *and* the dump-then-migrate path, `phpunit`, static analysis, and `npm run build` for the USSD service. Rewrite the rotation test to run real migrations so schema drift is caught. (C10, D)
 
 ### P3 — Hygiene
@@ -402,9 +434,13 @@ Recorded so the roadmap does not duplicate existing capability.
 | Platform/engineering gaps | **10** |
 | Still-open bugs from the June 2026 audit | **0** — all 5 resolved (see corrected C6 and Part G) |
 | Existing tests | **7 files, 51 test methods** — 45 cover chama |
-| P0 items remediated | **8 of 8** (Parts G1–G10) — 2 follow-ups need maintainer action |
+| P0 items remediated | **7 of 8** Part A defects fixed (G1–G10); A8 reclassified as dead-code cleanup (G11) — 2 follow-ups need maintainer action |
 
-**Bottom line:** the SACCO half of this product could be sold today after P0 items 1–8 and the C1 SMS fix. The Chama half is a UI sketch over a partial data model — it needs P1 in full (fines, GL, group accounts, lifecycle, cron, notifications, officer roles, reports, self-service, and USSD/API channels) before it can manage a real chama, and P2 items 22–23 before it can do what chamas actually exist for: **lending to each other**.
+**Bottom line (updated after Parts G1–G11):** the P0 batch is closed — 7 of the 8 Part A defects are fixed and the eighth was a mis-triage, not a pending task. With that done, the SACCO half of this product is sellable once the **C1 transaction-SMS fix** lands; C1 is now the single highest-value remaining item, because transaction notifications are silently not being sent on M-Pesa C2B/B2C, PesaLink, transfers, teller and portal savings.
+
+The Chama half is no longer *broken*, but it is still a UI sketch over a partial data model. It needs P1 in full (the rest of the fine ledger, GL posting, group accounts, lifecycle, cron, notifications, officer roles, reports, self-service, and USSD/API channels) before it can manage a real chama, and P2 items 22–23 before it can do what chamas actually exist for: **lending to each other**. Two money-handling policy questions are also open and need a client decision, not more code — see G10 (penalty direction, and whether payouts are based on the scheduled pot or on cash actually collected).
+
+One caveat applies to everything above: **none of it has been executed.** There is no PHP runtime in this environment, so `phpunit` was never run and `composer` dependencies are not installed. See the verification note at the end of Part G for what was checked mechanically instead, and what must be run before merge.
 
 ---
 
@@ -522,6 +558,20 @@ The P0 items from Part F have been implemented. Each entry names the defect it c
 - **Payout base: scheduled pot vs cash collected.** `pot_amount` is theoretical (`monthly_contribution × member count`, written when the schedule is built). The new `collected_amount` records what was actually posted for the period, and the UI flags a shortfall — but `net_payout_amount` still uses `pot_amount`. Basing payouts on cash actually held is more defensible, yet it changes every payout figure, so it was recorded for audit and surfaced rather than applied silently.
 
 Roadmap item 9 (per-member fine ledger) is now **partially delivered**: the accrual, waiver, per-cycle deduction and admin register exist. Still missing are a fine-type catalogue beyond late/missed contribution, collection against the next payout, and portal visibility for members.
+
+### G11. P0 item 8 (dashlite chama views) was reclassified, not implemented
+
+Item 8 was approved as part of the P0 batch and is **deliberately not done**. This is a scope decision worth stating plainly, because the honest conclusion is that the item was mis-triaged rather than that it is still pending.
+
+Writing the 10 missing views (6 portal chama + 4 admin group) would not make chama work on dashlite, for three independently sufficient reasons:
+
+1. **Dashlite cannot be activated.** `ThemeController::index()` builds the switcher list from `base_path('themes')` directories containing a `theme.json`. The root `themes/` directory holds **only `adminlte`**; there is no `themes/dashlite/` at all. The `core.active_theme` setting is seeded `'displayed' => '0'`, so it is not editable via the settings UI either — the sole route to dashlite is a manual database edit.
+2. **Dashlite has no layouts.** Every chama view `@extends('core::layouts.master')`, and that layout exists only at `themes/adminlte/views/layouts/master.blade.php`. There is no unthemed `Modules/Core/Resources/views/layouts/` and no dashlite `master.blade.php` anywhere in the repository. `CoreServiceProvider` would call `loadViewsFrom(base_path('themes/dashlite/views'), 'core')` on a path that does not exist.
+3. **The deficit is ~113 views in this module alone.** Sacco has 146 adminlte views against 23 dashlite — the worst ratio of any module (app-wide 631 vs 475). Adding 10 brings Sacco to 33 and still leaves the theme unactivatable, layout-less, and overwhelmingly incomplete.
+
+So the cost is a whole-theme port, not a 10-file fix, and the benefit of the 10-file fix in isolation is zero. Item 8 is recorded as **reclassified into C9** and moved to P3 of the roadmap, where the real decision belongs: either delete the 389 dead dashlite module views, or commit to building the root theme plus the missing views.
+
+**P0 status is therefore 7 of 8 items fixed in code, with item 8 reclassified as out-of-scope dead-code cleanup rather than left silently open.** If a client actually wants dashlite, that is a project of its own and should be scoped from C9, not from the chama list.
 
 ### Verification status
 

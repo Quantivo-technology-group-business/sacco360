@@ -58,7 +58,7 @@ Consequences:
 2. `ChamaController::myRotation()` filters past cycles with `whereIn('status', ['completed','paid'])` → a disbursed cycle never appears in the member's payout history.
 3. The badge in `group/show.blade.php:174` renders empty.
 
-### A4. `late_payment_penalty` is applied to the wrong thing
+### A4. `late_payment_penalty` is applied to the wrong thing — ✅ FIXED, see G10
 `GroupService::resolveBiddingCycle()` (line 204):
 ```php
 $cycle->penalties_deducted = (float) ($cycle->group->late_payment_penalty ?? 0);
@@ -66,6 +66,8 @@ $cycle->penalties_deducted = (float) ($cycle->group->late_payment_penalty ?? 0);
 This deducts the group's flat penalty **once per bidding cycle, from the pot, regardless of who was late or whether anyone was late.** There is no per-member fine record anywhere in the schema. A group with zero defaulters is fined; a group with five defaulters is fined once.
 
 Also: the penalty is only applied to **bidding** groups. `fixed` and `random` rotation models never apply any penalty at all.
+
+> **Worse than recorded here.** `resolveBiddingCycle()` was the only code in the entire Sacco module that ever wrote `status = 'completed'`. Groups on the `fixed` or `random` rotation models therefore had **no way to close a turn at all** — not merely "no penalty applied". Their cycles sat at `upcoming`/`active` forever with `net_payout_amount` at 0, and `disburseCycle()` would then pay out `pot - discount - 0` with no fines ever considered. Fixed in G10.
 
 ### A5. Authorization holes in `GroupController`
 ```php
@@ -148,8 +150,10 @@ group_id: parseInt("{{old('group_id')}}"),   // no matching <select>, no groups 
 ```
 These are dead columns. `SaccoGroup` is never referenced by the Loan, Savings, or Share modules.
 
-### B2. No fines / penalties subsystem
-Required for any real chama: late contribution, missed meeting, late arrival, absent-without-apology, phone-off-during-meeting, failure to take up a turn. Needs a fine type catalogue, per-member accrual, waiver, and collection against the next payout. **Nothing exists** — see A4.
+### B2. No fines / penalties subsystem — ⚠️ partially delivered by G10
+Required for any real chama: late contribution, missed meeting, late arrival, absent-without-apology, phone-off-during-meeting, failure to take up a turn. Needs a fine type catalogue, per-member accrual, waiver, and collection against the next payout.
+
+**Since G10 the accrual, waiver and per-cycle deduction half exists** — `sacco_group_penalties` records one row per member per cycle for `late_contribution` and `missed_contribution`, with an officer-attributed waiver and an admin register. **Still absent:** a configurable fine-type catalogue (the `penalty_type` enum currently has only the two contribution values), meeting-attendance fines, collection against a member's next payout rather than deduction from the cycle pot, and any member-facing view of their own fines in the portal. See roadmap item 9.
 
 ### B3. No group bank/savings account wiring
 `sacco_groups.group_savings_id` is defined (`2026_06_08_000001:128`, commented *"Linked savings account for group funds"*) and appears in `SaccoGroup::$fillable`. **It is never read or written by any code in the repository.** Group money has no account to live in.
@@ -356,7 +360,7 @@ Recorded so the roadmap does not duplicate existing capability.
 8. **Fix the group import**: route `DataImportService` enrollment through `GroupService::addMember()` (or at minimum set `joined_date`, honour `max_members`, and call `rebuildUpcomingSchedule()` for `merry_go_round` groups). Backfill `joined_date` for rows already imported as `'0000-00-00'`. (A7)
 
 ### P1 — Make chama real (~4–6 weeks)
-9. **Per-member fine ledger**: `sacco_group_fines` (type, member, period, amount, reason, status, waived_by). Accrue on late/missed contribution; deduct at payout; expose in admin and portal. Replaces the broken `late_payment_penalty` logic. (A4, B2)
+9. **Per-member fine ledger** — ⚠️ **partially delivered by G10; extend, do not rebuild.** `sacco_group_penalties` now exists with accrual on late/missed contribution, waiver with officer and reason, per-cycle deduction, and an admin register. **Remaining:** widen `penalty_type` into a configurable fine-type catalogue (missed meeting, late arrival, absent-without-apology, failure to take up a turn), collect fines against a member's next payout rather than only deducting from the cycle pot, and expose a member's own fines in the portal. Also resolve the two open policy questions in G10 (penalty direction, and pot-vs-cash payout base). (A4, B2)
 10. **GL integration**: seed group chart-of-accounts (Group Funds liability, Merry-Go-Round Suspense, Fines Income, Bidding Discount Income) and post double entries on contribution received, payout disbursed, and fine collected — mirroring `SavingsChannelService::createJournalEntry()`. (B4)
 11. **Wire `group_savings_id`**: open a real Savings account per group, and route contributions and payouts through `SavingsChannelService` so balances and statements are correct for free. (B3)
 12. **Group lifecycle**: edit route + form for all group fields, suspend/dissolve with a member-balance settlement step, member role change. (B5)
@@ -397,8 +401,8 @@ Recorded so the roadmap does not duplicate existing capability.
 | SACCO missing feature areas | **10** |
 | Platform/engineering gaps | **10** |
 | Still-open bugs from the June 2026 audit | **0** — all 5 resolved (see corrected C6 and Part G) |
-| Existing tests | **6 files, 26 test methods** — 20 cover chama |
-| P0 items remediated | **8 of 8** (Part G) — 2 follow-ups need maintainer action |
+| Existing tests | **7 files, 51 test methods** — 45 cover chama |
+| P0 items remediated | **8 of 8** (Parts G1–G10) — 2 follow-ups need maintainer action |
 
 **Bottom line:** the SACCO half of this product could be sold today after P0 items 1–8 and the C1 SMS fix. The Chama half is a UI sketch over a partial data model — it needs P1 in full (fines, GL, group accounts, lifecycle, cron, notifications, officer roles, reports, self-service, and USSD/API channels) before it can manage a real chama, and P2 items 22–23 before it can do what chamas actually exist for: **lending to each other**.
 
@@ -490,11 +494,40 @@ The P0 items from Part F have been implemented. Each entry names the defect it c
 
 - `tests/Feature/SaccoGroupContributionApprovalTest.php` — 14 tests: approval, double-approval, rejection gating and reason capture, reversal gating, reversal excluding a contribution from member totals, M-Pesa confirmation, **callback idempotency on a retried delivery**, unknown checkout id, amount-mismatch handling, disbursement recording, **the double-disbursement regression**, and disbursed cycles appearing in member history.
 - `tests/Feature/SaccoMeetingVisibilityTest.php` — 5 tests: own-group visibility, governance types never visible, SACCO-wide general meetings visible to all, exited members losing access, group-scoped committee meetings private to their members.
-- Both declare the status columns as **real enums**, mirroring production. The pre-existing rotation test used plain `string` columns, which is exactly why the A3 out-of-enum write was never caught.
+- `tests/Feature/SaccoGroupCyclePenaltyTest.php` — 25 tests covering G10: on-time payment producing no fines, late vs missing classification, **the flat-deduction regression** (three late members must cost 300, not 100), zero-rate groups, assessment idempotency, exited members, pending contributions not counting as paid, cycle completion for `fixed` and `random` models, double-completion, skipped/beneficiary-less/disbursed cycles, highest-bid selection, **the double-resolution regression that used to wipe the winner**, bidding with no bids, fines applying on the bidding path too, waivers recomputing the payout, `collected_amount` shortfalls, and the active scope.
+- All three declare the status columns as **real enums**, mirroring production. The pre-existing rotation test used plain `string` columns, which is exactly why the A3 out-of-enum write was never caught.
+
+### G10. Per-member late-payment fines, and cycle completion for every rotation model (closes A4)
+
+**The defect.** `late_payment_penalty` was read in exactly one place, where it was deducted from the pot as a single flat amount every cycle — regardless of how many members were late, whether anyone was, or who they were. A group with zero defaulters was fined the same as one with five. And because `resolveBiddingCycle()` was the *only* code in the module that ever wrote `status = 'completed'`, groups on the `fixed` or `random` models could never close a turn at all, so their penalty was never applied and their `net_payout_amount` stayed at 0.
+
+**New table `sacco_group_penalties`** (migration `2026_10_14_000006`) — one row per member per cycle: `penalty_type` enum (`late_contribution`, `missed_contribution`), `period`, `amount`, `status` enum (`assessed`, `waived`, `collected`), `reason`, `assessed_by_id`, `waived_by_id`, `waived_at`. A **unique index on `(cycle, member)`** makes double-assessment impossible at the database level rather than by convention in the service. Entity: `SaccoGroupPenalty`, with an `active()` scope (`assessed` + `collected`; `waived` excluded).
+
+**`GroupService::assessCyclePenalties()`** derives fines from evidence. A member is fined when, for the cycle's period (`cycle_date` formatted `Y-m`), they have either no `posted` contribution (missed) or one dated after the cycle date (late). Only `posted` money counts — a contribution still awaiting approval does not shield a member. Only `activeMembers` are assessed, so exited members are not fined. Idempotent: re-assessing adds nothing for a member already fined. Returns the cycle's non-waived total. A zero configured rate assesses nothing.
+
+**`GroupService::completeCycle()`** is the shared completion path for all rotation models. It refuses to reopen a `completed`/`paid` cycle, refuses a `skipped` turn, and refuses a cycle with no beneficiary. It records `penalties_deducted` from the assessed total and computes `net_payout_amount = max(0, pot − bidding_discount − penalties)`. `resolveBiddingCycle()` now keeps only winner selection and delegates the arithmetic here, so `fixed`/`random`/`bidding` all behave identically.
+
+**Two further bugs found and fixed while implementing this:**
+
+1. **`resolveBiddingCycle()` destroyed its own result on a second call.** It selected the highest *pending* bid, marked all pending bids lost, and saved. Called again, it found no pending bids and fell into the `else` branch — setting `beneficiary_client_id = null` and `bidding_discount = 0` on an already-resolved cycle. The winner of a completed pot was silently erased. It now throws `already been resolved` if the cycle is closed, and throws `no pending bids` rather than completing a cycle with a null beneficiary.
+2. **The cycle action buttons were gated on the wrong permission.** `group/show.blade.php` wrapped swap/skip/bid/resolve/disburse in `@can('sacco.groups.manage')`, while the routes enforce `sacco.groups.bidding` and `sacco.groups.disburse`. An officer with `manage` saw controls that returned 403; an officer with `disburse` but not `manage` saw none. The buttons now gate on the same permission their route enforces.
+
+**New routes/actions:** `POST sacco/group/{id}/complete-cycle/{cycleId}` → `completeCycle` (gated `sacco.groups.disburse`, since it fixes the amount to be paid); `POST sacco/group/{id}/penalty/{penaltyId}/waive` → `waivePenalty` (gated `sacco.groups.approve`, since waiving cancels money owed). Both scope by group id so one group's record cannot be actioned through another group's URL. Waiving keeps the row as `waived` with the officer and reason recorded, and recomputes the cycle's deduction and payout so the beneficiary is not still charged for a cancelled fine.
+
+**UI:** the cycles table gains Collected, Fines and Net Payout columns, and a new "Late Payment Fines" register lists every fine with its member, cycle, period, reason and status, plus a waiver form.
+
+**Two decisions deliberately left open — they are business questions, not bugs:**
+
+- **Direction of the penalty.** The column is named `penalties_deducted` and the original code subtracted it from the beneficiary's payout, so that semantic is preserved. But it is worth challenging: a fine is normally paid *by* the defaulter *to* the group, and deducting it from the beneficiary means the person who paid on time absorbs other members' lateness. Whether fines should instead be credited to the pot, held in a welfare account, or collected from the defaulter's next payout is a policy decision for the SACCO.
+- **Payout base: scheduled pot vs cash collected.** `pot_amount` is theoretical (`monthly_contribution × member count`, written when the schedule is built). The new `collected_amount` records what was actually posted for the period, and the UI flags a shortfall — but `net_payout_amount` still uses `pot_amount`. Basing payouts on cash actually held is more defensible, yet it changes every payout figure, so it was recorded for audit and surfaced rather than applied silently.
+
+Roadmap item 9 (per-member fine ledger) is now **partially delivered**: the accrual, waiver, per-cycle deduction and admin register exist. Still missing are a fine-type catalogue beyond late/missed contribution, collection against the next payout, and portal visibility for members.
 
 ### Verification status
 
-No PHP runtime is available in this environment (no `php`, no root for `apt`), so `phpunit` could not be executed and `composer` dependencies are not installed. Changes were verified by a string- and comment-aware brace/paren balance checker across all 19 modified and added PHP files, by confirming every new symbol resolves (`GroupService` is same-namespace in `DataImportService`; `Carbon` import added; `Modules\User\Entities\User` path confirmed; `$today`/`$now`/`$errors`/`$userId` all in scope at the enrollment block), and by re-reading each call site.
+No PHP runtime is available in this environment (no `php`, no root for `apt`), so `phpunit` could not be executed and `composer` dependencies are not installed. Changes were verified by a string- and comment-aware brace/paren balance checker across all modified and added PHP files, by confirming every new symbol resolves (`GroupService` is same-namespace in `DataImportService`; `Carbon` import added; `Modules\User\Entities\User` path confirmed; `$today`/`$now`/`$errors`/`$userId` all in scope at the enrollment block), and by re-reading each call site.
+
+Structural checks that were run mechanically, not by eye: every `permission:` string used in `GroupController` exists in `Modules/Sacco/Config/permissions.php`; all 23 `GroupController` actions are permission-gated with no phantom entries and none left unguarded; every `GroupController@method` referenced in `Routes/web.php` exists and every public method has a route; Blade `@if/@endif`, `@can/@endcan`, `@foreach/@endforeach`, `@php/@endphp` and `<section>/<div>/<table>/<form>` tags balance in every edited view; table header and body cell counts match; and no view, route or controller references any of the deleted orphan views.
 
 **These changes need `composer install && php artisan migrate && vendor/bin/phpunit` run against MySQL before merge.** The enum-widening migrations are the ones to watch, since they issue raw `ALTER … MODIFY` and are guarded to MySQL only.
 

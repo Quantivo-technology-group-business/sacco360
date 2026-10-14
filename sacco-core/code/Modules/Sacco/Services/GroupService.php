@@ -6,6 +6,7 @@ use Carbon\Carbon;
 use Modules\Sacco\Entities\SaccoGroup;
 use Modules\Sacco\Entities\SaccoGroupContribution;
 use Modules\Sacco\Entities\SaccoGroupMember;
+use Modules\Sacco\Entities\SaccoGroupPenalty;
 use Modules\Sacco\Entities\SaccoMerryGoRoundCycle;
 use Modules\Sacco\Entities\SaccoRotationBid;
 
@@ -173,12 +174,23 @@ class GroupService
     }
 
     /**
-     * Resolve the highest bid for a bidding cycle.
+     * Resolve the highest bid for a bidding cycle, then complete it.
+     *
+     * Winner selection stays here because it is specific to the bidding model;
+     * the payout arithmetic is shared with fixed/random via completeCycle().
+     *
+     * @throws \Exception if the cycle was already resolved — re-running it would
+     *         find no pending bids and silently wipe the beneficiary and the
+     *         winning discount, which is how a resolved cycle lost its winner.
      */
-    public function resolveBiddingCycle(int $cycleId): SaccoMerryGoRoundCycle
+    public function resolveBiddingCycle(int $cycleId, ?int $completedById = null): SaccoMerryGoRoundCycle
     {
         $cycle = SaccoMerryGoRoundCycle::findOrFail($cycleId);
         $cycle->load('group');
+
+        if (in_array($cycle->status, ['completed', 'paid'], true)) {
+            throw new \Exception('This cycle has already been resolved.');
+        }
 
         $winningBid = SaccoRotationBid::where('sacco_group_id', $cycle->sacco_group_id)
             ->where('cycle_number', $cycle->cycle_number)
@@ -186,27 +198,228 @@ class GroupService
             ->orderByDesc('bid_amount')
             ->first();
 
+        if (!$winningBid) {
+            // Nothing to resolve. Fail loudly rather than completing a cycle with
+            // a null beneficiary and a zero discount.
+            throw new \Exception('There are no pending bids for this cycle.');
+        }
+
         SaccoRotationBid::where('sacco_group_id', $cycle->sacco_group_id)
             ->where('cycle_number', $cycle->cycle_number)
             ->where('status', 'pending')
             ->update(['status' => 'lost']);
 
-        if ($winningBid) {
-            $winningBid->status = 'won';
-            $winningBid->save();
-            $cycle->beneficiary_client_id = $winningBid->client_id;
-            $cycle->bidding_discount = $winningBid->bid_amount;
-        } else {
-            $cycle->beneficiary_client_id = null;
-            $cycle->bidding_discount = 0;
+        $winningBid->status = 'won';
+        $winningBid->save();
+
+        $cycle->beneficiary_client_id = $winningBid->client_id;
+        $cycle->bidding_discount      = $winningBid->bid_amount;
+        $cycle->save();
+
+        return $this->completeCycle($cycle->id, $completedById);
+    }
+
+    /**
+     * Complete a rotation cycle for any rotation model and compute its payout.
+     *
+     * Before this existed, resolveBiddingCycle() was the only code in the whole
+     * Sacco module that ever wrote status 'completed'. Groups using the `fixed`
+     * or `random` rotation models therefore had no way to close a turn at all,
+     * and their late_payment_penalty was never applied.
+     *
+     * @throws \Exception if the cycle is already closed, was skipped, or has no
+     *         beneficiary to pay.
+     */
+    public function completeCycle(int $cycleId, ?int $completedById = null): SaccoMerryGoRoundCycle
+    {
+        $cycle = SaccoMerryGoRoundCycle::findOrFail($cycleId);
+        $cycle->loadMissing('group');
+
+        if (in_array($cycle->status, ['completed', 'paid'], true)) {
+            throw new \Exception('This cycle has already been completed.');
         }
 
-        $cycle->penalties_deducted = (float) ($cycle->group->late_payment_penalty ?? 0);
-        $cycle->net_payout_amount = max(0, (float) $cycle->pot_amount - (float) $cycle->bidding_discount - (float) $cycle->penalties_deducted);
+        if ($cycle->status === 'skipped') {
+            throw new \Exception('A skipped turn cannot be completed.');
+        }
+
+        if (!$cycle->beneficiary_client_id) {
+            throw new \Exception('This cycle has no beneficiary, so there is nothing to pay out.');
+        }
+
+        $penalties = $this->assessCyclePenalties($cycle, $completedById);
+
+        // Audit only: record what was actually posted for this cycle's period so
+        // the gap against the theoretical pot is visible. Deliberately not used
+        // in the payout maths yet — see Part G10.
+        $collected = $this->collectedForCycle($cycle);
+
+        $cycle->collected_amount   = $collected;
+        $cycle->penalties_deducted = $penalties;
+        $cycle->net_payout_amount  = max(
+            0,
+            (float) $cycle->pot_amount - (float) $cycle->bidding_discount - $penalties
+        );
         $cycle->status = 'completed';
         $cycle->save();
 
         return $cycle;
+    }
+
+    /**
+     * Assess per-member late-payment fines for a cycle and return their total.
+     *
+     * This replaces the previous behaviour of deducting the group's
+     * late_payment_penalty once per cycle as a flat amount, regardless of how
+     * many members were late, whether anyone was, or who they were — which both
+     * underpaid the beneficiary when nobody was late and underpaid the group
+     * when several members were, with no record of either.
+     *
+     * A member is fined when, for the cycle's period, they have either no posted
+     * contribution at all (missed) or one dated after the cycle date (late).
+     *
+     * Idempotent: re-assessing a cycle adds nothing for a member who already has
+     * a fine, and the unique index on (cycle, member) enforces the same at the
+     * database level.
+     *
+     * @return float total of this cycle's non-waived fines
+     */
+    public function assessCyclePenalties(SaccoMerryGoRoundCycle $cycle, ?int $assessedById = null): float
+    {
+        $cycle->loadMissing('group');
+        $group = $cycle->group;
+
+        $rate = (float) ($group->late_payment_penalty ?? 0);
+
+        // Nothing to assess, and no cycle_date to judge lateness against. Return
+        // whatever was previously assessed rather than silently zeroing it.
+        if ($rate <= 0 || !$cycle->cycle_date) {
+            return $this->activePenaltyTotal($cycle);
+        }
+
+        $cycleDate = Carbon::parse($cycle->cycle_date)->endOfDay();
+        $period    = Carbon::parse($cycle->cycle_date)->format('Y-m');
+
+        foreach ($group->activeMembers as $member) {
+            $alreadyFined = SaccoGroupPenalty::where('sacco_merry_go_round_cycle_id', $cycle->id)
+                ->where('sacco_group_member_id', $member->id)
+                ->exists();
+
+            if ($alreadyFined) {
+                continue;
+            }
+
+            $contribution = SaccoGroupContribution::where('sacco_group_id', $group->id)
+                ->where('sacco_group_member_id', $member->id)
+                ->where('period', $period)
+                ->where('status', 'posted')
+                ->first();
+
+            if ($contribution) {
+                $paidOn = Carbon::parse($contribution->contribution_date)->endOfDay();
+
+                if (!$paidOn->greaterThan($cycleDate)) {
+                    continue; // paid on time
+                }
+
+                $type   = 'late_contribution';
+                $reason = sprintf(
+                    'Contribution for %s dated %s, after the cycle due date %s.',
+                    $period,
+                    $paidOn->toDateString(),
+                    $cycleDate->toDateString()
+                );
+            } else {
+                $type   = 'missed_contribution';
+                $reason = sprintf(
+                    'No posted contribution for period %s as at %s.',
+                    $period,
+                    Carbon::today()->toDateString()
+                );
+            }
+
+            SaccoGroupPenalty::create([
+                'sacco_group_id'                  => $group->id,
+                'sacco_group_member_id'           => $member->id,
+                'client_id'                       => $member->client_id,
+                'sacco_merry_go_round_cycle_id'   => $cycle->id,
+                'penalty_type'                    => $type,
+                'period'                          => $period,
+                'amount'                          => $rate,
+                'status'                          => 'assessed',
+                'reason'                          => $reason,
+                'assessed_by_id'                  => $assessedById,
+            ]);
+        }
+
+        return $this->activePenaltyTotal($cycle);
+    }
+
+    /**
+     * Waive a fine so it stops counting against the cycle.
+     *
+     * Kept as a row with status 'waived' rather than deleted, so the fact that
+     * it was raised and then cancelled by an officer remains on the record.
+     */
+    public function waivePenalty(SaccoGroupPenalty $penalty, string $reason, ?int $waivedById = null): SaccoGroupPenalty
+    {
+        if ($penalty->status === 'waived') {
+            throw new \Exception('This penalty has already been waived.');
+        }
+
+        if ($penalty->status === 'collected') {
+            throw new \Exception('A collected penalty cannot be waived.');
+        }
+
+        $penalty->status      = 'waived';
+        $penalty->waived_by_id = $waivedById;
+        $penalty->waived_at   = Carbon::now();
+        $penalty->reason      = trim(($penalty->reason ? $penalty->reason . "\n" : '') . 'Waived: ' . $reason);
+        $penalty->save();
+
+        // The cycle's deduction must follow, or the beneficiary would still be
+        // charged for a fine that no longer exists.
+        if ($penalty->sacco_merry_go_round_cycle_id) {
+            $cycle = SaccoMerryGoRoundCycle::find($penalty->sacco_merry_go_round_cycle_id);
+
+            if ($cycle && !in_array($cycle->status, ['paid'], true)) {
+                $cycle->penalties_deducted = $this->activePenaltyTotal($cycle);
+                $cycle->net_payout_amount  = max(
+                    0,
+                    (float) $cycle->pot_amount - (float) $cycle->bidding_discount - (float) $cycle->penalties_deducted
+                );
+                $cycle->save();
+            }
+        }
+
+        return $penalty;
+    }
+
+    /**
+     * Total of a cycle's fines that still count (assessed or collected).
+     */
+    private function activePenaltyTotal(SaccoMerryGoRoundCycle $cycle): float
+    {
+        return (float) SaccoGroupPenalty::where('sacco_merry_go_round_cycle_id', $cycle->id)
+            ->active()
+            ->sum('amount');
+    }
+
+    /**
+     * Sum of posted contributions for the period a cycle falls in.
+     */
+    private function collectedForCycle(SaccoMerryGoRoundCycle $cycle): ?float
+    {
+        if (!$cycle->cycle_date) {
+            return null;
+        }
+
+        $period = Carbon::parse($cycle->cycle_date)->format('Y-m');
+
+        return (float) SaccoGroupContribution::where('sacco_group_id', $cycle->sacco_group_id)
+            ->where('period', $period)
+            ->where('status', 'posted')
+            ->sum('amount');
     }
 
     /**

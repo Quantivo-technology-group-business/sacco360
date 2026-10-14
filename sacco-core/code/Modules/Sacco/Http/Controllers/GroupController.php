@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Auth;
 use Modules\Sacco\Entities\SaccoGroup;
 use Modules\Sacco\Entities\SaccoGroupMember;
 use Modules\Sacco\Entities\SaccoGroupContribution;
+use Modules\Sacco\Entities\SaccoGroupPenalty;
 use Modules\Sacco\Entities\SaccoMerryGoRoundCycle;
 use Modules\Sacco\Services\GroupService;
 use Modules\Client\Entities\Client;
@@ -26,7 +27,11 @@ class GroupController extends Controller
         $this->middleware('permission:sacco.groups.contributions')->only(['contributions', 'get_contributions']);
         $this->middleware('permission:sacco.groups.approve')->only(['approveContribution', 'rejectContribution', 'reverseContribution']);
         $this->middleware('permission:sacco.groups.bidding')->only(['swapTurns', 'skipTurn', 'submitBid', 'resolveBidCycle']);
-        $this->middleware('permission:sacco.groups.disburse')->only(['disburseCycle']);
+        // completeCycle fixes the amount that will be paid out, so it sits with
+        // disbursement rather than with bidding management.
+        $this->middleware('permission:sacco.groups.disburse')->only(['disburseCycle', 'completeCycle']);
+        // Waiving a fine cancels money owed, so it is an approval-level act.
+        $this->middleware('permission:sacco.groups.approve')->only(['waivePenalty']);
     }
 
     public function index()
@@ -97,7 +102,14 @@ class GroupController extends Controller
             ->where('status', 'pending')
             ->count();
 
-        return theme_view('sacco::group.show', compact('group', 'clients', 'pendingCount'));
+        // Per-member late-payment fines, newest first, so the deduction taken
+        // from each cycle's payout is attributable on screen.
+        $penalties = SaccoGroupPenalty::where('sacco_group_id', $id)
+            ->with(['client', 'cycle'])
+            ->orderByDesc('id')
+            ->get();
+
+        return theme_view('sacco::group.show', compact('group', 'clients', 'pendingCount', 'penalties'));
     }
 
     public function addMember(Request $request, $id, GroupService $service)
@@ -247,6 +259,61 @@ class GroupController extends Controller
         }
 
         return redirect('sacco/group/' . $id . '/show');
+    }
+
+    /**
+     * Close a rotation turn for any rotation model and compute its payout.
+     *
+     * Until this existed, resolveBidCycle() was the only way to complete a
+     * cycle, so groups on the `fixed` or `random` models could never close a
+     * turn and their late-payment penalty was never applied.
+     */
+    public function completeCycle($id, $cycleId, GroupService $service)
+    {
+        // Scoped by group id so one group's cycle cannot be actioned through
+        // another group's URL.
+        $cycle = SaccoMerryGoRoundCycle::where('sacco_group_id', $id)->findOrFail($cycleId);
+
+        try {
+            $completed = $service->completeCycle($cycle->id, Auth::id());
+
+            $fines = SaccoGroupPenalty::where('sacco_merry_go_round_cycle_id', $cycle->id)->active()->count();
+
+            \flash(sprintf(
+                'Cycle #%d completed. Net payout %s (%s in late-payment fines across %d member%s).',
+                $completed->cycle_number,
+                number_format((float) $completed->net_payout_amount, 2),
+                number_format((float) $completed->penalties_deducted, 2),
+                $fines,
+                $fines === 1 ? '' : 's'
+            ))->success()->important();
+        } catch (\Exception $e) {
+            \flash($e->getMessage())->error()->important();
+        }
+
+        return redirect('sacco/group/' . $id . '/show');
+    }
+
+    /**
+     * Waive a member's fine, with a reason, and recompute the cycle payout.
+     */
+    public function waivePenalty(Request $request, $id, $penaltyId, GroupService $service)
+    {
+        $request->validate(['reason' => 'required|string|max:255']);
+
+        $penalty = SaccoGroupPenalty::where('sacco_group_id', $id)
+            ->with('client')
+            ->findOrFail($penaltyId);
+
+        try {
+            $service->waivePenalty($penalty, $request->reason, Auth::id());
+
+            \flash('Penalty waived for ' . ($penalty->client->name ?? 'member') . '.')->success()->important();
+        } catch (\Exception $e) {
+            \flash($e->getMessage())->error()->important();
+        }
+
+        return redirect()->back();
     }
 
     public function contributions($id)

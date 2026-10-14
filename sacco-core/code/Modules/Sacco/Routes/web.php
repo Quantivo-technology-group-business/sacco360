@@ -381,7 +381,9 @@ Route::prefix('sacco')->group(function () {
         Route::post('{id}/skip-turn/{cycleId}', 'GroupController@skipTurn');
         Route::post('{id}/submit-bid/{cycleId}', 'GroupController@submitBid');
         Route::post('{id}/resolve-bid/{cycleId}', 'GroupController@resolveBidCycle');
+        Route::post('{id}/complete-cycle/{cycleId}', 'GroupController@completeCycle');
         Route::post('{id}/disburse-cycle/{cycleId}', 'GroupController@disburseCycle');
+        Route::post('{id}/penalty/{penaltyId}/waive', 'GroupController@waivePenalty');
         Route::get('{id}/contributions', 'GroupController@contributions');
         Route::get('{id}/get_contributions', 'GroupController@get_contributions');
         Route::post('{id}/member/{memberId}/role', 'GroupController@updateMemberRole');

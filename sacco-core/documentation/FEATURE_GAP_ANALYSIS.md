@@ -479,6 +479,9 @@ The P0 items from Part F have been implemented. Each entry names the defect it c
 - `sacco-core/.env`, `sacco-core/code/.env` and `code/.phpunit.result.cache` untracked via `git rm --cached`; files remain on disk.
 - Hardcoded production IP `149.102.129.28` removed from `docker-compose.yml`, `deploy.sh` and `.env.docker.example`. `DB_HOST`, `DB_USERNAME`, `DB_PASSWORD` now use `${VAR:?…}` so compose **fails fast** instead of silently defaulting to `ulm`/`ulm`. `deploy.sh` derives its printed URLs from a new `APP_HOST`.
 
+> **⚠️ Before pulling this branch: back up your local `.env` files.**
+> The untracking commit records a *deletion* of `sacco-core/.env` and `sacco-core/code/.env`. `git rm --cached` keeps them on the machine that ran it, but any other clone that pulls or checks out this commit will have its local copies **deleted from the working tree** — including a deployment server. Copy both aside first, pull, then restore them. They are now gitignored, so they will stay untracked afterwards. (`deploy.sh` also self-heals by copying `.env.docker.example`, but that loses real credentials.)
+
 > **Two items still require action by the maintainers and cannot be done from a branch:**
 > 1. **Rotate `APP_KEY`.** The committed key `base64:M4NMiZg+8ZtNKeo72FMt7Bh1hGP4KPPqFOQN4LDfRTM=` must be treated as compromised. Rotating it invalidates existing encrypted cookies/sessions and any encrypted columns, so it needs a maintenance window — it is not a change to make silently from a PR.
 > 2. **Purge `.env` from git history.** Untracking stops future leakage but the key remains in every past commit. `git filter-repo` rewrites SHAs and force-pushes `main`, which affects every clone and open branch; that needs explicit sign-off.

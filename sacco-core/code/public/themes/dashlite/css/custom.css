@@ -1,0 +1,202 @@
+/* ================================================================
+   Ultimate Loan Manager — Dashlite Custom UI
+   Fintech / Banking aesthetic: navy + gold, Inter, Stripe-level polish
+   Compatible: Bootstrap 4 + Dashlite
+   ================================================================ */
+
+/* ── Design Tokens ─────────────────────────────────────────────── */
+:root {
+    --ulm-navy:        #0c2340;
+    --ulm-navy-mid:    #1a3a5c;
+    --ulm-navy-light:  #2a5080;
+    --ulm-gold:        #c5a572;
+    --ulm-gold-light:  #d4bc8e;
+    --ulm-slate:       #64748b;
+    --ulm-slate-light: #94a3b8;
+    --ulm-bg:          #f4f6f9;
+    --ulm-surface:     #ffffff;
+    --ulm-border:      #e2e8f0;
+    --ulm-text:        #1e293b;
+    --ulm-text-muted:  #64748b;
+    --ulm-radius:      8px;
+    --ulm-radius-lg:   12px;
+    --ulm-shadow-sm:   0 1px 4px rgba(12,35,64,.07);
+    --ulm-shadow:      0 4px 16px rgba(12,35,64,.10);
+    --ulm-shadow-lg:   0 8px 32px rgba(12,35,64,.13);
+    --ulm-transition:  0.2s ease;
+
+    --status-active:       #16a34a;
+    --status-active-bg:    #dcfce7;
+    --status-paid:         #0891b2;
+    --status-paid-bg:      #e0f2fe;
+    --status-overdue:      #dc2626;
+    --status-overdue-bg:   #fee2e2;
+    --status-pending:      #d97706;
+    --status-pending-bg:   #fef3c7;
+    --status-closed:       #6b7280;
+    --status-closed-bg:    #f3f4f6;
+    --status-approved:     #7c3aed;
+    --status-approved-bg:  #ede9fe;
+}
+
+/* ── Base & Typography ──────────────────────────────────────────── */
+body {
+    font-family: 'Inter', 'Source Sans Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    color: var(--ulm-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-weight: 700;
+    letter-spacing: -0.015em;
+}
+
+/* ── Cards ──────────────────────────────────────────────────────── */
+.card {
+    border: 1px solid var(--ulm-border) !important;
+    border-radius: var(--ulm-radius-lg) !important;
+    box-shadow: var(--ulm-shadow-sm);
+    transition: box-shadow var(--ulm-transition), transform var(--ulm-transition);
+}
+
+.card:hover { box-shadow: var(--ulm-shadow); }
+
+.card-header,
+.card-inner-group .card-inner {
+    border-bottom: 1px solid var(--ulm-border) !important;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────── */
+.btn {
+    border-radius: var(--ulm-radius);
+    font-weight: 600;
+    font-size: 0.8rem;
+    transition: transform var(--ulm-transition), box-shadow var(--ulm-transition);
+    cursor: pointer;
+}
+
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: none; }
+
+/* ── Forms ──────────────────────────────────────────────────────── */
+.form-control {
+    border: 1.5px solid var(--ulm-border);
+    border-radius: var(--ulm-radius);
+    font-size: 0.875rem;
+    transition: border-color var(--ulm-transition), box-shadow var(--ulm-transition);
+}
+
+.form-control:focus {
+    border-color: var(--sacco-primary, var(--ulm-navy));
+    box-shadow: 0 0 0 3px rgba(12,35,64,.10);
+}
+
+label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+
+/* ── Tables ─────────────────────────────────────────────────────── */
+.table thead th {
+    background: #f8fafc;
+    border-bottom: 2px solid var(--ulm-border) !important;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ulm-slate);
+    padding: 0.7rem 1rem;
+    white-space: nowrap;
+}
+
+.table tbody tr { transition: background var(--ulm-transition); }
+.table tbody tr:hover { background-color: rgba(12,35,64,.03); }
+.table tbody td { padding: 0.7rem 1rem; border-top: 1px solid #f1f5f9; vertical-align: middle; }
+
+table.pretty { width: 100%; border-collapse: collapse; }
+table.pretty th, table.pretty td { border: 1px solid var(--ulm-border); padding: 0.5rem 0.75rem; font-size: 0.84rem; }
+table.pretty thead tr th { background: #f8fafc; border-bottom: 2px solid var(--ulm-border); font-weight: 700; text-align: center; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ulm-slate); }
+table.pretty thead tr th.empty { border: 0 none; }
+table.pretty tfoot tr th { border-bottom: 2px solid var(--ulm-border); border-top: 2px solid var(--ulm-border); font-weight: 700; text-align: center; background: #f8fafc; }
+table.pretty tbody tr td { border-top: 1px solid var(--ulm-border); text-align: center; }
+table.pretty tbody tr.odd td { background: rgba(248,250,252,.8); }
+table.pretty tbody tr.even td { background: #fff; }
+
+/* ── DataTables ─────────────────────────────────────────────────── */
+.dataTables_wrapper div.dataTables_filter input {
+    border: 1.5px solid var(--ulm-border);
+    border-radius: var(--ulm-radius);
+    padding: 0.3rem 0.6rem;
+    font-size: 0.82rem;
+    transition: border-color var(--ulm-transition);
+}
+.dataTables_wrapper div.dataTables_filter input:focus {
+    outline: none;
+    border-color: var(--sacco-primary, var(--ulm-navy));
+}
+div.dataTables_wrapper div.dataTables_info { font-size: 0.78rem; color: var(--ulm-slate); }
+table.dataTable thead th { border-bottom: 2px solid var(--ulm-border) !important; }
+
+/* ── Badges ─────────────────────────────────────────────────────── */
+.badge {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.3em 0.65em;
+    border-radius: 2rem;
+}
+
+.badge-success  { background: var(--status-active-bg); color: var(--status-active); }
+.badge-info     { background: var(--status-paid-bg); color: var(--status-paid); }
+.badge-danger   { background: var(--status-overdue-bg); color: var(--status-overdue); }
+.badge-warning  { background: var(--status-pending-bg); color: var(--status-pending); }
+.badge-secondary{ background: var(--status-closed-bg); color: var(--status-closed); }
+
+/* ── Modals ─────────────────────────────────────────────────────── */
+.modal-content { border: none; border-radius: var(--ulm-radius-lg); box-shadow: 0 20px 60px rgba(0,0,0,.18); }
+.modal-header  { border-bottom: 1px solid var(--ulm-border); border-radius: var(--ulm-radius-lg) var(--ulm-radius-lg) 0 0; }
+.modal-footer  { border-top: 1px solid var(--ulm-border); background: #f8fafc; border-radius: 0 0 var(--ulm-radius-lg) var(--ulm-radius-lg); }
+
+/* ── Grid Stack / Dashboard ─────────────────────────────────────── */
+.grid-stack { background: transparent; min-height: 400px; }
+
+.grid-stack-item-content {
+    overflow: hidden;
+    border-radius: var(--ulm-radius-lg);
+    box-shadow: var(--ulm-shadow-sm);
+    background: var(--ulm-surface);
+    border: 1px solid var(--ulm-border);
+    transition: box-shadow var(--ulm-transition);
+}
+
+.grid-stack-item-content:hover { box-shadow: var(--ulm-shadow); }
+
+.grid-stack-item-content .card {
+    margin-bottom: 0;
+    height: 100%;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* ── Utilities ──────────────────────────────────────────────────── */
+.strikethrough { text-decoration: line-through; color: var(--status-overdue); }
+.font-11 { font-size: 11px; }
+
+.opacity-75 { opacity: 0.75; }
+.opacity-50 { opacity: 0.5; }
+.opacity-25 { opacity: 0.25; }
+
+.month, .year { margin: 2px; }
+caption, th { text-align: left; }
+
+.style-0 { empty-cells: show; table-layout: fixed; width: 100%; }
+.style-1 { color: white; padding: 8pt 10pt; font-size: 12pt; font-weight: bold; background-color: var(--sacco-primary, var(--ulm-navy)); }
+
+/* ── Reduced motion ─────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}

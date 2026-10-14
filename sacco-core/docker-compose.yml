@@ -1,0 +1,45 @@
+services:
+  app:
+    build:
+      context: ./code
+      dockerfile: Dockerfile
+    ports:
+      - "0.0.0.0:${APP_PORT:-8080}:80"
+      - "0.0.0.0:${APP_PORT_ALT:-8088}:80"
+    volumes:
+      - ./code:/var/www/html
+    environment: &app-env
+      APP_NAME: "Ultimate Loan Manager"
+      APP_ENV: local
+      APP_DEBUG: "true"
+      APP_URL: ${APP_URL:-http://149.102.129.28:${APP_PORT:-8080}}
+      DB_CONNECTION: mysql
+      DB_HOST: ${DB_HOST:-149.102.129.28}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_DATABASE: ${DB_DATABASE:-ulm}
+      DB_USERNAME: ${DB_USERNAME:-ulm}
+      DB_PASSWORD: ${DB_PASSWORD:-ulm}
+      QUEUE_CONNECTION: database
+      CACHE_DRIVER: file
+      SESSION_DRIVER: file
+    restart: unless-stopped
+
+  queue:
+    build:
+      context: ./code
+      dockerfile: Dockerfile
+    command: php artisan queue:work --queue=default,high,normal,low --tries=3 --sleep=3
+    volumes:
+      - ./code:/var/www/html
+    environment: *app-env
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ./code
+      dockerfile: Dockerfile
+    command: sh -c "while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"
+    volumes:
+      - ./code:/var/www/html
+    environment: *app-env
+    restart: unless-stopped

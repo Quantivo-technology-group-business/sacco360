@@ -1,0 +1,421 @@
+/* Financial institution login theme — uses SACCO brand colors from admin panel settings */
+:root {
+    --fin-navy: var(--sacco-primary, #0d5c3d);
+    --fin-navy-mid: var(--sacco-primary-dark, #0a4a31);
+    --fin-gold: var(--sacco-accent, #d4a012);
+    --fin-gold-light: color-mix(in srgb, var(--sacco-accent, #d4a012) 70%, #fff);
+}
+
+.auth-split-page {
+    height: 100%;
+    min-height: 100vh;
+    background: #f8fafc;
+    overflow-x: hidden;
+    font-family: 'Inter', 'Source Sans Pro', sans-serif;
+}
+
+.auth-split-screen {
+    display: flex;
+    min-height: 100vh;
+    width: 100%;
+}
+
+/* ── Slider panel ── */
+.auth-slider-panel {
+    position: relative;
+    flex: 0 0 50%;
+    width: 50%;
+    min-height: 100vh;
+    overflow: hidden;
+}
+
+#loginCarousel,
+#loginCarousel .carousel-inner,
+#loginCarousel .carousel-item {
+    height: 100%;
+    min-height: 100vh;
+}
+
+.auth-slide {
+    height: 100%;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem 4rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.auth-slide::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, color-mix(in srgb, var(--fin-navy) 92%, transparent) 0%, color-mix(in srgb, var(--fin-navy) 75%, transparent) 50%, color-mix(in srgb, var(--fin-navy-mid) 60%, transparent) 100%);
+    z-index: 1;
+}
+
+.auth-slide-1,
+.auth-slide-2,
+.auth-slide-3 {
+    background: transparent;
+}
+
+.auth-slide::after {
+    content: '';
+    position: absolute;
+    inset: -10%;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    animation: authKenBurns 5s ease-out forwards;
+    z-index: 0;
+}
+
+.auth-slide-1::after {
+    background-image: url('https://images.unsplash.com/photo-1563986768609-322da13575f3?w=1400&q=80');
+}
+
+.auth-slide-2::after {
+    background-image: url('https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?w=1400&q=80');
+}
+
+.auth-slide-3::after {
+    background-image: url('https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1400&q=80');
+}
+
+.carousel-item:not(.active) .auth-slide::after {
+    animation: none;
+    transform: scale(1);
+}
+
+.auth-slide-content {
+    position: relative;
+    z-index: 2;
+    color: #fff;
+    max-width: 500px;
+    text-align: center;
+    animation: authSlideIn 0.8s ease-out;
+}
+
+.auth-slide-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--fin-gold) 20%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fin-gold) 35%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.75rem;
+    color: var(--fin-gold-light);
+    margin: 0 auto 1.5rem;
+}
+
+.auth-slide-content h2 {
+    font-size: 2rem;
+    font-weight: 800;
+    margin-bottom: 1rem;
+    letter-spacing: -0.02em;
+}
+
+.auth-slide-content p {
+    font-size: 1.05rem;
+    line-height: 1.7;
+    opacity: 0.88;
+    margin: 0;
+}
+
+.auth-slider-brand {
+    position: absolute;
+    top: 2rem;
+    left: 2.5rem;
+    z-index: 10;
+    color: #fff;
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.auth-slider-brand::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 18px;
+    background: var(--fin-gold);
+    margin-right: 0.75rem;
+    vertical-align: middle;
+    border-radius: 2px;
+}
+
+.auth-carousel-indicators {
+    bottom: 2.5rem;
+    margin-bottom: 0;
+}
+
+.auth-carousel-indicators li {
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background-color: rgba(255, 255, 255, 0.35);
+    border: none;
+    margin: 0 4px;
+    transition: background-color 0.3s;
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.auth-carousel-indicators li.active {
+    background-color: rgba(255, 255, 255, 0.25);
+}
+
+.auth-carousel-indicators li.active::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    width: 100%;
+    background: var(--fin-gold);
+    transform: scaleX(0);
+    transform-origin: left center;
+    animation: authIndicatorProgress 5s linear forwards;
+}
+
+.auth-carousel-control {
+    width: 5%;
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+.auth-slider-panel:hover .auth-carousel-control {
+    opacity: 0.6;
+}
+
+/* ── Form panel ── */
+.auth-form-panel {
+    flex: 0 0 50%;
+    width: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem 3.5rem;
+    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    border-left: 1px solid color-mix(in srgb, var(--fin-navy) 6%, #e2e8f0);
+}
+
+.auth-login-box {
+    width: 100%;
+    max-width: 420px;
+    margin: 0;
+}
+
+.auth-login-box .login-logo {
+    margin-bottom: 1.75rem;
+}
+
+.auth-login-box .login-logo h4 {
+    color: var(--fin-navy);
+    font-weight: 800;
+    font-size: 1.25rem;
+}
+
+.auth-login-card {
+    border: 1px solid color-mix(in srgb, var(--fin-navy) 8%, #e2e8f0);
+    border-radius: 16px;
+    box-shadow: 0 8px 32px color-mix(in srgb, var(--fin-navy) 8%, transparent);
+}
+
+.auth-login-card .login-card-body {
+    padding: 2rem 2rem 1.75rem;
+}
+
+.auth-login-card .login-box-msg {
+    font-size: 0.95rem;
+    color: #64748b;
+    margin-bottom: 1.5rem;
+    font-weight: 500;
+}
+
+.auth-login-card .form-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--fin-navy);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.auth-input-wrap {
+    position: relative;
+}
+
+.auth-input-icon {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #94a3b8;
+    font-size: 0.85rem;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.auth-input {
+    padding-left: 2.5rem !important;
+    border-radius: 8px;
+    border: 1.5px solid #e2e8f0;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    font-size: 0.95rem;
+}
+
+.auth-input:focus {
+    border-color: var(--fin-navy);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--fin-navy) 12%, transparent);
+}
+
+.auth-pass-toggle {
+    right: 12px;
+    z-index: 3;
+}
+
+.auth-login-btn {
+    background: linear-gradient(135deg, var(--fin-navy) 0%, var(--fin-navy-mid) 100%);
+    border: none;
+    border-radius: 8px;
+    padding: 0.7rem 1rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.auth-login-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px color-mix(in srgb, var(--fin-navy) 35%, transparent);
+    background: linear-gradient(135deg, var(--fin-navy-mid) 0%, var(--fin-navy) 100%);
+}
+
+.auth-form-trust {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+    font-size: 0.75rem;
+    color: #94a3b8;
+}
+
+.auth-form-trust i {
+    color: var(--fin-gold);
+}
+
+@keyframes authSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(24px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes authKenBurns {
+    from {
+        transform: scale(1);
+    }
+    to {
+        transform: scale(1.08);
+    }
+}
+
+@keyframes authIndicatorProgress {
+    from {
+        transform: scaleX(0);
+    }
+    to {
+        transform: scaleX(1);
+    }
+}
+
+.carousel-item.active .auth-slide-content {
+    animation: authSlideIn 0.9s ease-out;
+}
+
+.carousel-fade .carousel-item {
+    opacity: 0;
+    transition: opacity 0.9s ease-in-out;
+}
+
+.carousel-fade .carousel-item.active {
+    opacity: 1;
+}
+
+/* ── Responsive ── */
+@media (max-width: 991px) {
+    .auth-split-screen {
+        flex-direction: column;
+    }
+
+    .auth-slider-panel {
+        flex: none;
+        width: 100%;
+        min-height: 260px;
+        max-height: 300px;
+    }
+
+    .auth-slide {
+        min-height: 260px;
+        padding: 2rem 1.5rem;
+    }
+
+    .auth-slide-content h2 {
+        font-size: 1.35rem;
+    }
+
+    .auth-slide-content p {
+        font-size: 0.875rem;
+    }
+
+    .auth-slide-icon {
+        width: 52px;
+        height: 52px;
+        font-size: 1.25rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .auth-slider-brand {
+        top: 1rem;
+        left: 1.25rem;
+        font-size: 0.9rem;
+    }
+
+    .auth-carousel-indicators {
+        bottom: 1rem;
+    }
+
+    .auth-form-panel {
+        flex: none;
+        width: 100%;
+        padding: 1.5rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .auth-slider-panel {
+        min-height: 200px;
+        max-height: 220px;
+    }
+
+    .auth-slide {
+        min-height: 200px;
+    }
+
+    .auth-slide-content h2 {
+        font-size: 1.1rem;
+    }
+
+    .auth-slide-content p {
+        display: none;
+    }
+}

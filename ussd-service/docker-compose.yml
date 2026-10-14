@@ -1,0 +1,17 @@
+services:
+  ussd:
+    build: .
+    ports:
+      - "0.0.0.0:${USSD_PORT:-3001}:3001"
+    env_file: .env
+    depends_on:
+      - redis
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    restart: unless-stopped

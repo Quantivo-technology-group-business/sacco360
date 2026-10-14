@@ -18,6 +18,7 @@
                         <tr>
                             <th>Title</th>
                             <th>Type</th>
+                            <th>Group</th>
                             <th>Date</th>
                             <th>Venue</th>
                             <th>Status</th>
@@ -29,6 +30,13 @@
                         <tr>
                             <td>{{ $m->title }}</td>
                             <td>{{ strtoupper(str_replace('_', ' ', $m->meeting_type)) }}</td>
+                            <td>
+                                @if($m->group)
+                                    <span class="badge badge-info">{{ $m->group->name }}</span>
+                                @else
+                                    <span class="text-muted">SACCO-wide</span>
+                                @endif
+                            </td>
                             <td>{{ \Carbon\Carbon::parse($m->scheduled_date)->format('d M Y') }}</td>
                             <td>{{ $m->venue ?? '—' }}</td>
                             <td>
@@ -48,7 +56,7 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="6" class="text-center text-muted py-4">No meetings scheduled.</td>
+                            <td colspan="7" class="text-center text-muted py-4">No meetings scheduled.</td>
                         </tr>
                     @endforelse
                     </tbody>

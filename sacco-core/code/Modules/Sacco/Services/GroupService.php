@@ -239,6 +239,127 @@ class GroupService
     }
 
     /**
+     * Approve a member-submitted contribution, moving it from 'pending' to 'posted'.
+     *
+     * This is the only sanctioned path out of 'pending'. Before it existed, the
+     * portal recorded cash/bank/M-Pesa contributions as pending and nothing in
+     * the codebase ever confirmed them.
+     *
+     * @param int|null $approvedById the officer approving, or null when the
+     *                               approval is automated (M-Pesa STK callback).
+     *                               Null is recorded as-is rather than defaulted
+     *                               to a real user, so the audit trail never
+     *                               attributes a system action to a person.
+     */
+    public function approveContribution(SaccoGroupContribution $contribution, ?int $approvedById = null): SaccoGroupContribution
+    {
+        if ($contribution->status === 'posted') {
+            throw new \Exception('This contribution has already been approved.');
+        }
+
+        if ($contribution->status === 'reversed') {
+            throw new \Exception('A reversed contribution cannot be approved.');
+        }
+
+        $contribution->status         = 'posted';
+        $contribution->approved_by_id = $approvedById;
+        $contribution->approved_at    = Carbon::now();
+        $contribution->rejection_reason = null;
+        $contribution->save();
+
+        return $contribution;
+    }
+
+    /**
+     * Reject a pending contribution. The row is kept for audit rather than deleted.
+     */
+    public function rejectContribution(SaccoGroupContribution $contribution, string $reason, int $approvedById): SaccoGroupContribution
+    {
+        if ($contribution->status !== 'pending') {
+            throw new \Exception('Only a pending contribution can be rejected.');
+        }
+
+        $contribution->status           = 'rejected';
+        $contribution->approved_by_id   = $approvedById;
+        $contribution->approved_at      = Carbon::now();
+        $contribution->rejection_reason = $reason;
+        $contribution->save();
+
+        return $contribution;
+    }
+
+    /**
+     * Reverse a posted contribution (wrong amount, duplicate, bounced payment).
+     *
+     * The row is retained with status 'reversed' so the audit trail survives;
+     * getMemberTotalContributions() and every report already filter on 'posted'.
+     */
+    public function reverseContribution(SaccoGroupContribution $contribution, string $reason, int $approvedById): SaccoGroupContribution
+    {
+        if ($contribution->status === 'reversed') {
+            throw new \Exception('This contribution has already been reversed.');
+        }
+
+        if ($contribution->status === 'pending') {
+            throw new \Exception('A pending contribution should be rejected, not reversed.');
+        }
+
+        $contribution->status           = 'reversed';
+        $contribution->approved_by_id   = $approvedById;
+        $contribution->approved_at      = Carbon::now();
+        $contribution->rejection_reason = $reason;
+        $contribution->save();
+
+        return $contribution;
+    }
+
+    /**
+     * Record a successful M-Pesa STK callback against a contribution.
+     *
+     * Matched on the Daraja CheckoutRequestID stored at push time. Idempotent:
+     * Safaricom retries callbacks, and a second delivery must not double-post.
+     *
+     * @return SaccoGroupContribution|null null when no contribution matches
+     */
+    public function confirmMpesaContribution(string $checkoutRequestId, string $receiptNumber, ?float $paidAmount = null): ?SaccoGroupContribution
+    {
+        $contribution = SaccoGroupContribution::where('checkout_request_id', $checkoutRequestId)
+            ->whereIn('status', ['pending', 'rejected'])
+            ->first();
+
+        if (!$contribution) {
+            // Already confirmed by an earlier callback delivery, or unknown id.
+            return null;
+        }
+
+        // Amount mismatch is a genuine exception — record it rather than
+        // silently posting a different figure than the member authorised.
+        if ($paidAmount !== null && abs($paidAmount - (float) $contribution->amount) > 0.01) {
+            $contribution->status           = 'pending';
+            $contribution->rejection_reason = sprintf(
+                'M-Pesa amount mismatch: expected %.2f, received %.2f (receipt %s). Requires manual approval.',
+                (float) $contribution->amount,
+                $paidAmount,
+                $receiptNumber
+            );
+            $contribution->mpesa_receipt_number = $receiptNumber;
+            $contribution->save();
+
+            return $contribution;
+        }
+
+        $contribution->mpesa_receipt_number = $receiptNumber;
+        $contribution->payment_reference    = $contribution->payment_reference ?: $receiptNumber;
+        $contribution->notes                = trim(($contribution->notes ? $contribution->notes . "\n" : '')
+            . 'Confirmed automatically by M-Pesa STK callback (receipt ' . $receiptNumber . ').');
+
+        // No human approver: this is a system confirmation. Passing a fallback
+        // user id here would make an automated posting look like an officer
+        // approval in the audit trail.
+        return $this->approveContribution($contribution, null);
+    }
+
+    /**
      * Rebuild upcoming merry-go-round cycles using the configured rotation model.
      */
     private function rebuildUpcomingSchedule(SaccoGroup $group, Carbon $startDate, int $createdById): void

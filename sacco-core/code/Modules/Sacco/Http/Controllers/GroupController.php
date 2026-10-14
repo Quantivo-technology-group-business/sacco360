@@ -21,8 +21,12 @@ class GroupController extends Controller
     {
         $this->middleware(['auth', '2fa']);
         $this->middleware('permission:sacco.groups.index')->only(['index', 'show', 'get_groups']);
-        $this->middleware('permission:sacco.groups.create')->only(['create', 'store', 'addMember', 'storeMember', 'postContributions', 'generateSchedule']);
-        $this->middleware('permission:sacco.groups.manage')->only(['removeMember', 'updateMemberRole']);
+        $this->middleware('permission:sacco.groups.create')->only(['create', 'store', 'addMember', 'postContributions', 'generateSchedule']);
+        $this->middleware('permission:sacco.groups.manage')->only(['removeMember', 'updateMemberRole', 'updateSettings']);
+        $this->middleware('permission:sacco.groups.contributions')->only(['contributions', 'get_contributions']);
+        $this->middleware('permission:sacco.groups.approve')->only(['approveContribution', 'rejectContribution', 'reverseContribution']);
+        $this->middleware('permission:sacco.groups.bidding')->only(['swapTurns', 'skipTurn', 'submitBid', 'resolveBidCycle']);
+        $this->middleware('permission:sacco.groups.disburse')->only(['disburseCycle']);
     }
 
     public function index()
@@ -86,7 +90,14 @@ class GroupController extends Controller
     {
         $group   = SaccoGroup::with(['members.client', 'merryGoRoundCycles.beneficiary'])->findOrFail($id);
         $clients = Client::where('status', 1)->orderBy('first_name')->get();
-        return theme_view('sacco::group.show', compact('group', 'clients'));
+
+        // Surfaces the approval queue on the group landing page; without it the
+        // contribution register had no entry point in the UI.
+        $pendingCount = SaccoGroupContribution::where('sacco_group_id', $id)
+            ->where('status', 'pending')
+            ->count();
+
+        return theme_view('sacco::group.show', compact('group', 'clients', 'pendingCount'));
     }
 
     public function addMember(Request $request, $id, GroupService $service)
@@ -240,11 +251,163 @@ class GroupController extends Controller
 
     public function contributions($id)
     {
-        $group         = SaccoGroup::findOrFail($id);
-        $contributions = SaccoGroupContribution::with('client')
-            ->where('sacco_group_id', $id)
-            ->orderByDesc('contribution_date')
-            ->paginate(30);
-        return theme_view('sacco::group.contributions', compact('group', 'contributions'));
+        $group = SaccoGroup::findOrFail($id);
+
+        $pendingCount = SaccoGroupContribution::where('sacco_group_id', $id)
+            ->where('status', 'pending')
+            ->count();
+
+        return theme_view('sacco::group.contributions', compact('group', 'pendingCount'));
+    }
+
+    /**
+     * Server-side DataTable for the group contribution register.
+     *
+     * Replaces the old read-only paginate(30) table, which gave officers no way
+     * to search a period or act on a pending contribution.
+     */
+    public function get_contributions(Request $request, $id)
+    {
+        $group = SaccoGroup::findOrFail($id);
+
+        $query = SaccoGroupContribution::with(['client', 'approvedBy'])
+            ->where('sacco_group_id', $group->id);
+
+        if ($status = $request->input('status')) {
+            $query->where('status', $status);
+        }
+        if ($period = $request->input('period')) {
+            $query->where('period', $period);
+        }
+
+        return DataTables::of($query)
+            ->addColumn('member', fn($c) => $c->client->full_name ?? '—')
+            ->addColumn('amount_formatted', fn($c) => number_format((float) $c->amount, 2))
+            ->addColumn('method', fn($c) => ucfirst($c->payment_method ?? '—'))
+            ->addColumn('reference', fn($c) => $c->mpesa_receipt_number ?: ($c->payment_reference ?: '—'))
+            ->addColumn('status_badge', function ($c) {
+                $map = [
+                    'posted'   => 'success',
+                    'pending'  => 'warning',
+                    'rejected' => 'danger',
+                    'reversed' => 'secondary',
+                ];
+                $class = $map[$c->status] ?? 'secondary';
+
+                return '<span class="badge badge-' . $class . '">' . ucfirst($c->status) . '</span>';
+            })
+            ->addColumn('action', function ($c) use ($group) {
+                $base = url('sacco/group/' . $group->id);
+                $html = '';
+
+                if ($c->status === 'pending' && auth()->user()->can('sacco.groups.approve')) {
+                    $html .= '<form method="POST" action="' . $base . '/contribution/' . $c->id . '/approve" class="d-inline">'
+                           . csrf_field()
+                           . '<button type="submit" class="btn btn-sm btn-success" title="Approve"><i class="fas fa-check"></i></button>'
+                           . '</form> ';
+                    $html .= '<button type="button" class="btn btn-sm btn-danger reject-btn" data-id="' . $c->id . '" title="Reject"><i class="fas fa-times"></i></button>';
+                } elseif ($c->status === 'posted' && auth()->user()->can('sacco.groups.approve')) {
+                    $html .= '<button type="button" class="btn btn-sm btn-warning reverse-btn" data-id="' . $c->id . '" title="Reverse"><i class="fas fa-undo"></i></button>';
+                }
+
+                if ($c->rejection_reason) {
+                    $html .= ' <i class="fas fa-info-circle" title="' . e($c->rejection_reason) . '"></i>';
+                }
+
+                return $html ?: '—';
+            })
+            ->rawColumns(['status_badge', 'action'])
+            ->make(true);
+    }
+
+    /**
+     * Confirm receipt of a member-submitted contribution.
+     */
+    public function approveContribution($id, $contributionId, GroupService $service)
+    {
+        $contribution = SaccoGroupContribution::where('sacco_group_id', $id)->findOrFail($contributionId);
+
+        try {
+            $service->approveContribution($contribution, Auth::id());
+            \flash('Contribution of ' . number_format((float) $contribution->amount, 2) . ' approved.')->success()->important();
+        } catch (\Exception $e) {
+            \flash($e->getMessage())->error()->important();
+        }
+
+        return redirect('sacco/group/' . $id . '/contributions');
+    }
+
+    /**
+     * Reject a pending contribution, recording why.
+     */
+    public function rejectContribution(Request $request, $id, $contributionId, GroupService $service)
+    {
+        $request->validate(['reason' => 'required|string|max:255']);
+
+        $contribution = SaccoGroupContribution::where('sacco_group_id', $id)->findOrFail($contributionId);
+
+        try {
+            $service->rejectContribution($contribution, $request->reason, Auth::id());
+            \flash('Contribution rejected.')->warning()->important();
+        } catch (\Exception $e) {
+            \flash($e->getMessage())->error()->important();
+        }
+
+        return redirect('sacco/group/' . $id . '/contributions');
+    }
+
+    /**
+     * Reverse an already-posted contribution (duplicate, wrong amount, bounce).
+     */
+    public function reverseContribution(Request $request, $id, $contributionId, GroupService $service)
+    {
+        $request->validate(['reason' => 'required|string|max:255']);
+
+        $contribution = SaccoGroupContribution::where('sacco_group_id', $id)->findOrFail($contributionId);
+
+        try {
+            $service->reverseContribution($contribution, $request->reason, Auth::id());
+            \flash('Contribution reversed.')->warning()->important();
+        } catch (\Exception $e) {
+            \flash($e->getMessage())->error()->important();
+        }
+
+        return redirect('sacco/group/' . $id . '/contributions');
+    }
+
+    /**
+     * Change an officer/member role within the group.
+     *
+     * Previously declared in the middleware list but never implemented, so role
+     * changes were both unguarded and impossible.
+     */
+    public function updateMemberRole(Request $request, $id, $memberId)
+    {
+        $request->validate([
+            'role' => 'required|in:member,chairperson,secretary,treasurer,committee',
+        ]);
+
+        $group  = SaccoGroup::findOrFail($id);
+        $member = SaccoGroupMember::where('sacco_group_id', $id)->findOrFail($memberId);
+
+        $member->role = $request->role;
+        $member->save();
+
+        // Keep the denormalised officer pointers on the group in step, so the
+        // portal and reports do not disagree with the membership row.
+        $officerColumn = [
+            'chairperson' => 'chairperson_client_id',
+            'secretary'   => 'secretary_client_id',
+            'treasurer'   => 'treasurer_client_id',
+        ][$request->role] ?? null;
+
+        if ($officerColumn) {
+            $group->{$officerColumn} = $member->client_id;
+            $group->save();
+        }
+
+        \flash('Member role updated to ' . ucfirst($request->role) . '.')->success()->important();
+
+        return redirect('sacco/group/' . $id . '/show');
     }
 }

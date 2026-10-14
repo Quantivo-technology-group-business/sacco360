@@ -21,6 +21,22 @@
                 <select name="branch_id" class="form-control"><option value="">— All —</option>
                 @foreach($branches as $b)<option value="{{ $b->id }}">{{ $b->name }}</option>@endforeach
                 </select></div></div>
+            <div class="col-md-3"><div class="form-group">
+                <label>Chama Group</label>
+                <select name="sacco_group_id" class="form-control">
+                    <option value="">— SACCO-wide (no group) —</option>
+                    @foreach($groups as $g)
+                        <option value="{{ $g->id }}" @if(old('sacco_group_id') == $g->id) selected @endif>
+                            {{ $g->name }}
+                        </option>
+                    @endforeach
+                </select>
+                <small class="form-text text-muted">
+                    Group meetings are visible in the member portal only to that group's members.
+                    SACCO-wide meetings are visible to all members only when the type is AGM, SGM or Other —
+                    board, credit-committee, supervisory and management minutes stay internal.
+                </small>
+            </div></div>
         </div>
         <div class="row">
             <div class="col-md-2"><div class="form-group"><label>Date <span class="text-danger">*</span></label>

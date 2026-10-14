@@ -98,6 +98,10 @@ return [
     ['name' => 'sacco.groups.index',     'display_name' => 'View Groups',                      'module' => 'Sacco', 'parent' => 'sacco.groups'],
     ['name' => 'sacco.groups.create',    'display_name' => 'Create Group & Add Members',        'module' => 'Sacco', 'parent' => 'sacco.groups'],
     ['name' => 'sacco.groups.manage',    'display_name' => 'Manage Group Members & Roles',      'module' => 'Sacco', 'parent' => 'sacco.groups'],
+    ['name' => 'sacco.groups.contributions', 'display_name' => 'View Group Contributions',      'module' => 'Sacco', 'parent' => 'sacco.groups'],
+    ['name' => 'sacco.groups.approve',   'display_name' => 'Approve & Reverse Contributions',  'module' => 'Sacco', 'parent' => 'sacco.groups'],
+    ['name' => 'sacco.groups.disburse',  'display_name' => 'Disburse Rotation Payouts',        'module' => 'Sacco', 'parent' => 'sacco.groups'],
+    ['name' => 'sacco.groups.bidding',   'display_name' => 'Manage Rotation Bidding',          'module' => 'Sacco', 'parent' => 'sacco.groups'],
 
     // ── Investment Portfolio ───────────────────────────────────────────────────
     ['name' => 'sacco.investments',       'display_name' => 'Investment Portfolio',             'module' => 'Sacco', 'parent' => 'sacco'],

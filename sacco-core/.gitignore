@@ -1,0 +1,3 @@
+# Deployment environment — holds live DB credentials.
+# The committed template is .env.docker.example; copy it and fill in locally.
+.env

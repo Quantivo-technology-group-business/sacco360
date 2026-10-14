@@ -79,7 +79,8 @@ class MeetingController extends Controller
     public function create()
     {
         $branches = Branch::where('active', 1)->orderBy('name')->get();
-        return theme_view('sacco::meeting.create', compact('branches'));
+        $groups   = \Modules\Sacco\Entities\SaccoGroup::where('status', 'active')->orderBy('name')->get();
+        return theme_view('sacco::meeting.create', compact('branches', 'groups'));
     }
 
     public function store(Request $request, MeetingService $service)
@@ -88,6 +89,9 @@ class MeetingController extends Controller
             'title'          => 'required|string|max:200',
             'meeting_type'   => 'required|in:agm,sgm,board,credit_committee,supervisory,management,other',
             'scheduled_date' => 'required|date',
+            // NULL = SACCO-wide meeting; a group id scopes it to that chama and
+            // keeps it out of the member portal for non-members.
+            'sacco_group_id' => 'nullable|exists:sacco_groups,id',
         ]);
 
         $agendaItems = [];
@@ -108,7 +112,7 @@ class MeetingController extends Controller
             array_merge(
                 $request->only([
                     'title', 'meeting_type', 'scheduled_date', 'scheduled_time',
-                    'venue', 'notice', 'quorum_required', 'branch_id',
+                    'venue', 'notice', 'quorum_required', 'branch_id', 'sacco_group_id',
                 ]),
                 ['created_by_id' => Auth::id(), 'status' => 'scheduled']
             ),

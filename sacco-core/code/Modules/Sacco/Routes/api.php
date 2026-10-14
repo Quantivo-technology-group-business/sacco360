@@ -16,6 +16,7 @@ Route::prefix('v1/sacco')->group(function () {
     Route::post('atm', 'AtmController@process')->middleware('sacco.atm.api');
     Route::post('mpesa/c2b/validate', 'MpesaC2bController@validate');
     Route::post('mpesa/c2b/confirm', 'MpesaC2bController@confirm');
+    Route::post('mpesa/stk/group-contribution', 'MpesaC2bController@stkGroupContribution');
     Route::post('mpesa/b2c/result', 'MpesaB2cController@result');
     Route::post('mpesa/b2c/timeout', 'MpesaB2cController@timeout');
     Route::post('pesalink/inbound', 'PesalinkController@inbound');

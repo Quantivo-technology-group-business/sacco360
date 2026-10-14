@@ -2,6 +2,7 @@
 
 namespace Modules\Sacco\Services;
 
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Modules\Client\Entities\Client;
@@ -188,22 +189,81 @@ class DataImportService
                 $enrollInsert[] = [
                     'sacco_group_id' => $en['group_id'],
                     'client_id'      => $cid,
+                    'role'           => 'member',
+                    // joined_date is NOT NULL with no default and is the sort key
+                    // GroupService::orderMembers() uses for 'fixed' rotation.
+                    // Omitting it made MySQL write '0000-00-00', tying every
+                    // imported member on the same date and making the
+                    // merry-go-round payout order arbitrary.
+                    'joined_date'    => $today,
+                    'shares_held'    => 0,
                     'status'         => 'active',
                     'created_at'     => $now,
                     'updated_at'     => $now,
                 ];
             }
 
-            // Insert only those not already members
+            // Insert only those not already members, honouring group capacity.
+            // Bypassing GroupService::addMember() for bulk speed, so the
+            // max_members check it performs has to be replicated here.
+            $capacity = [];
+            $touchedGroups = [];
+            $skippedOverCapacity = 0;
+
             foreach (array_chunk($enrollInsert, $chunkSize) as $chunk) {
                 foreach ($chunk as $en) {
+                    $gid = $en['sacco_group_id'];
+
+                    if (!isset($capacity[$gid])) {
+                        $group = $groupsByName->first(fn($g) => (int) $g->id === (int) $gid);
+                        $capacity[$gid] = [
+                            'max'  => $group ? (int) $group->max_members : 0,
+                            'type' => $group->type ?? null,
+                            'used' => DB::table('sacco_group_members')
+                                ->where('sacco_group_id', $gid)
+                                ->whereIn('status', ['active', 'suspended'])
+                                ->count(),
+                        ];
+                    }
+
                     $exists = DB::table('sacco_group_members')
-                        ->where('sacco_group_id', $en['sacco_group_id'])
+                        ->where('sacco_group_id', $gid)
                         ->where('client_id', $en['client_id'])
                         ->exists();
-                    if (!$exists) {
-                        DB::table('sacco_group_members')->insert($en);
+
+                    if ($exists) {
+                        continue;
                     }
+
+                    // max_members of 0/null means unlimited.
+                    if ($capacity[$gid]['max'] > 0 && $capacity[$gid]['used'] >= $capacity[$gid]['max']) {
+                        $skippedOverCapacity++;
+                        $errors[] = "Client id {$en['client_id']}: group is full (max {$capacity[$gid]['max']} members).";
+                        continue;
+                    }
+
+                    DB::table('sacco_group_members')->insert($en);
+                    $capacity[$gid]['used']++;
+                    $touchedGroups[$gid] = $capacity[$gid]['type'];
+                }
+            }
+
+            // A merry-go-round group that gained members has a stale rotation:
+            // the cycle sequence was built from the old membership. Rebuild the
+            // upcoming schedule so the new members actually get a turn.
+            foreach (array_keys($touchedGroups) as $gid) {
+                if (($touchedGroups[$gid] ?? null) !== 'merry_go_round') {
+                    continue;
+                }
+                try {
+                    $group = SaccoGroup::find($gid);
+                    if ($group) {
+                        app(GroupService::class)->generateMerryGoRoundSchedule($group, Carbon::today(), $userId);
+                    }
+                } catch (\Throwable $e) {
+                    // A group with no active members throws by design; that is not
+                    // an import failure, so record and carry on.
+                    $errors[] = "Group {$gid}: rotation schedule not rebuilt ({$e->getMessage()}).";
                 }
             }
         }

@@ -272,16 +272,18 @@ Zero occurrences of `insurance` or `credit_life` anywhere in `Modules/`. Kenyan 
 ### C5. No estate / probate workflow for deceased members (P2)
 `deceased` is a valid `member_status_detail` and `WingService::isWithdrawable()` permits BOSA withdrawal on death. But there is no capture of letters of administration or a death certificate as a *gating* requirement, no beneficiary apportionment engine (`SaccoBeneficiary` stores beneficiaries but nothing splits a balance across them by percentage), and no estate account. Payout to a deceased member's estate is currently an unstructured manual withdrawal.
 
-### C6. Known copy-paste bugs from the June audit are all still open (P1)
-Re-verified against current `main`:
+### C6. Known copy-paste bugs from the June audit — severity corrected (P1)
+Re-verified against current `main`. **Three of the five were misclassified as "Critical" in the June audit: they are orphaned dead code, not reachable pages.** No controller or route references them, so no user could ever load them.
 
-| # | Bug | Status |
-|---|-----|--------|
-| 1 | `FlutterwaveController::webhook()` reads `STRIPE_SIGNATURE`, does `new Stripe()` (not imported), calls `\Stripe\Webhook::constructEvent()` | **Still present** — lines 45, 46, 51 |
-| 2 | `Modules/Mpesa/Routes/web.php` registers `get_loan_intent` and `get_access_token`; `MpesaController` defines only `capture_payment()` and `webhook()` | **Still present** — both routes 500 |
-| 3 | `Savings/.../withdrawal/index.blade.php` is byte-identical to `deposit/index.blade.php` | **Still present** — `diff -q` confirms identical |
-| 4 | `savings_linked_charge/index.blade.php` and `share_linked_charge/index.blade.php` are copies of the loan version | **Still present** — 28 `loan::*` references in each |
-| 5 | Orphaned Savings report views in the User module (`report/balance`, `report/transaction`, `report/balance_pdf`) | **Still present** — all 3 byte-identical across both modules; `User\ReportController` only implements `index()` and `performance()` |
+| # | Bug | Reachable? | Resolution |
+|---|-----|-----------|------------|
+| 1 | `FlutterwaveController::webhook()` reads `STRIPE_SIGNATURE`, does `new Stripe()` (not imported), calls `\Stripe\Webhook::constructEvent()` | **Yes** — routed at `webhooks/flutterwave` | **Fixed** — rewritten with `verif-hash` validation and API re-verification (see Part G) |
+| 2 | `Modules/Mpesa/Routes/web.php` registers `get_loan_intent` and `get_access_token`; `MpesaController` defines only `capture_payment()` and `webhook()` | Routes registered, but **nothing calls them** — no blade, no JS, no PHP | **Fixed** — both routes removed (see Part G) |
+| 3 | `Savings/.../withdrawal/index.blade.php` byte-identical to `deposit/index.blade.php` | **No** — `savings::withdrawal.index` and `savings::deposit.index` are referenced by no controller; only `withdrawal.create/edit` and `deposit.create/edit` are | **Fixed** — deleted both orphans (4 files incl. dashlite) |
+| 4 | `savings_linked_charge/index.blade.php` and `share_linked_charge/index.blade.php` are copies of the loan version (28 `loan::*` refs each) | **No** — and neither is `loan_linked_charge.index`, the supposed "correct" original | **Fixed** — deleted all 4 orphans (incl. dashlite) |
+| 5 | Orphaned Savings report views in the User module (`report/balance`, `report/transaction`, `report/balance_pdf`) | **No** — `User\ReportController` only references `report.index`, `report.performance`, `report.performance_pdf` | **Fixed** — deleted 3 orphans |
+
+Verification method: extracted every `theme_view('module::path')` call across `Modules/` and `app/`, resolved each against both theme directories, and cross-checked `Modules/*/Routes/*.php`. The reachability question was not asked in the June audit, which is why dead templates were scored as critical defects.
 
 ### C7. Dual API authentication still unresolved (P1)
 `api/v1/login|register|logout` (User module) and `api/v1/logind|registers|logoutd` (Api module) both exist. They assign role `"client"` vs `"Client"`, one creates a `Client` + `ClientUser` record and the other does not, one enables 2FA and the other does not, and they return different error shapes (400 vs 422). Any mobile app built against this will create inconsistent member records depending on which endpoint it happened to call.
@@ -343,7 +345,7 @@ Recorded so the roadmap does not duplicate existing capability.
 
 ## PART F — Prioritized roadmap
 
-### P0 — Stop the bleeding (small, surgical, ~1–2 weeks)
+### P0 — Stop the bleeding ✅ DONE — see Part G
 1. **Implement `MpesaStkService::pushGroupContribution()`** and a matching C2B/STK callback branch that flips the contribution to `posted` and credits the member. (A1)
 2. **Add the pending-contribution approval queue**: `GroupController@contributions` becomes a DataTable with approve / reject / reverse actions, guarded by a new `sacco.groups.approve` permission. (A2)
 3. **Fix the enum**: migration to `enum('upcoming','active','completed','skipped','paid')` — or change `disburseCycle()` to write `completed` and track disbursement via `disbursed_at`. Then the re-disbursement guard works. (A3)
@@ -367,6 +369,7 @@ Recorded so the roadmap does not duplicate existing capability.
 19. **Member360 / teller / search integration**: add a group dimension to `Member360Service::getSummary()` and `getBulkSummaries()`, surface it on the teller desk and client-360 page, index groups in `GlobalSearchService`, include group activity in statements. (B15)
 20. **Consolidate API auth** to one controller and one route set; deprecate `logind`/`registers`/`logoutd`. (C7)
 21. **Credit-life insurance module**: insurer, product-level premium rate, per-loan premium accrual, death claim → loan settlement. (C2)
+21a. **Verify all unauthenticated payment webhooks** (found while implementing G1): `MpesaC2bService::confirm()` posts a real FOSA deposit from an unverified request body; `mpesa/b2c/result`, `pesalink/inbound` and the unsigned gateway webhooks are the same shape. Add IP allowlisting or server-side re-query for Daraja and confirm each gateway validates its signature. Pre-existing and live, so it needs a maintenance window and per-gateway verification rather than a blanket change. (G1 callout)
 
 ### P2 — Complete the platform (~4–8 weeks)
 22. **Group lending**: populate `loans.group_id` against `sacco_groups`, add a group loan product type with joint liability, and let group savings act as collateral in `LoanAppraisalService`. Delete or repurpose the dead `savings.group_id` / `shares.group_id`. (B1)
@@ -393,7 +396,103 @@ Recorded so the roadmap does not duplicate existing capability.
 | Chama missing feature areas | **17** |
 | SACCO missing feature areas | **10** |
 | Platform/engineering gaps | **10** |
-| Still-open bugs from the June 2026 audit | **5 confirmed** |
-| Existing tests | **4 files, 7 test methods** — only 1 covers chama |
+| Still-open bugs from the June 2026 audit | **0** — all 5 resolved (see corrected C6 and Part G) |
+| Existing tests | **6 files, 26 test methods** — 20 cover chama |
+| P0 items remediated | **8 of 8** (Part G) — 2 follow-ups need maintainer action |
 
 **Bottom line:** the SACCO half of this product could be sold today after P0 items 1–8 and the C1 SMS fix. The Chama half is a UI sketch over a partial data model — it needs P1 in full (fines, GL, group accounts, lifecycle, cron, notifications, officer roles, reports, self-service, and USSD/API channels) before it can manage a real chama, and P2 items 22–23 before it can do what chamas actually exist for: **lending to each other**.
+
+---
+
+## PART G — P0 remediation applied (2026-10-14)
+
+The P0 items from Part F have been implemented. Each entry names the defect it closes and the files touched.
+
+### G1. M-Pesa chama contributions now work (closes A1)
+
+`MpesaStkService::pushGroupContribution()` **implemented** — it was called by the portal but did not exist.
+
+- `Modules/Sacco/Services/MpesaStkService.php` — new method plus three extracted helpers now shared with `pushLoanRepayment()`: `credentials()` (validates all five Daraja settings and names the missing one), `accessToken()`, `normalisePhone()` (handles `254…`, `07…`, and bare `7…`/`1…` forms). Persists `CheckoutRequestID` and `MerchantRequestID` on the contribution so the callback can be matched.
+- `Modules/Sacco/Http/Controllers/MpesaC2bController.php` — new `stkGroupContribution()` callback. Parses `Body.stkCallback`, re-matches on `CheckoutRequestID`, handles non-zero `ResultCode` (member cancelled/timed out) by annotating rather than posting, and always answers 200 so Daraja stops retrying. Writes to `AuditLogger`.
+- `Modules/Sacco/Routes/api.php` — `POST api/v1/sacco/mpesa/stk/group-contribution`.
+- Migration `2026_10_14_000003` adds `checkout_request_id` (indexed), `merchant_request_id`, `mpesa_receipt_number`.
+
+**Callback is verified against Daraja, not trusted.** The STK callback URL is unauthenticated — Safaricom does not sign it — so the payload alone is spoofable, and this endpoint posts money. `MpesaStkService::queryStkStatus()` re-queries `/mpesa/stkpushquery/v1/query` with the `CheckoutRequestID` and the controller only calls `confirmMpesaContribution()` when Daraja reports `ResultCode 0`. It **fails safe**: an unreachable API, missing credentials, or any thrown error yields `verified = false`, so the contribution stays `pending` for an officer instead of posting unconfirmed money. The endpoint still answers 200 so a genuine-but-unverifiable callback is not retried forever.
+
+> **Related exposure found while implementing this (new finding, not previously in this document):**
+> `MpesaC2bService::confirm()` — reached from the already-live `POST api/v1/sacco/mpesa/c2b/confirm` — performs **no** signature, IP or re-verification check. It trusts `TransID`, `TransAmount` and `BillRefNumber` from the request body and posts a real deposit into the member's FOSA account via `SavingsChannelService::postDeposit()`. A forged POST with a guessed paybill reference would credit an arbitrary member. The same applies to `mpesa/b2c/result`, `pesalink/inbound`, and the Stripe/PayPal/Paynow/Flutterwave webhook routes that do not verify a signature.
+>
+> This is **not fixed here** — it is a pre-existing condition on live endpoints, and changing it could break payments in production if the gateway is currently sending something other than what the docs describe. It needs its own ticket: verify Daraja C2B callbacks (IP allowlist or re-query), and confirm each gateway webhook validates its signature. Added to Part F as P1 item 21a.
+
+### G2. Pending contributions can be approved, rejected, reversed (closes A2)
+
+- `Modules/Sacco/Services/GroupService.php` — `approveContribution()`, `rejectContribution()`, `reverseContribution()`, and `confirmMpesaContribution()` (idempotent; on amount mismatch it leaves the row `pending` with an explanatory note rather than silently posting a different figure than the member authorised).
+- `Modules/Sacco/Http/Controllers/GroupController.php` — four new actions, all scoped by `where('sacco_group_id', $id)` so one group's contribution id cannot be actioned through another group's URL.
+- `contributions()` rewritten from a read-only `paginate(30)` table into a server-side DataTable (`get_contributions`) with status and period filters, and per-row approve / reject / reverse controls gated on `sacco.groups.approve`.
+- Migration `2026_10_14_000003` adds `approved_by_id`, `approved_at`, `rejection_reason`, and widens the status enum to include `rejected` — reusing `reversed` would have conflated "never accepted" with "accepted then unwound".
+- `Modules/Sacco/Entities/SaccoGroupContribution.php` — new fillables, `approvedBy()` relation, `pending()` / `posted()` scopes.
+
+### G3. Rotation disbursement no longer corrupts state (closes A3)
+
+- Migration `2026_10_14_000001` widens `sacco_merry_go_round_cycles.status` to include `paid`, and repairs rows already truncated to `''` (→ `paid` when `disbursed_at` is set, otherwise `completed`). `down()` collapses `paid` back before narrowing, so the rollback cannot re-corrupt.
+- The "already disbursed" guard in `disburseCycle()` therefore now fires, and disbursed cycles appear in the portal's `whereIn(['completed','paid'])` history.
+
+### G4. Group actions are permission-gated (closes A5)
+
+- `GroupController` middleware now covers all seven previously-unguarded actions, including `disburseCycle` (money movement):
+
+| Action | Permission |
+|--------|-----------|
+| `contributions`, `get_contributions` | `sacco.groups.contributions` |
+| `approveContribution`, `rejectContribution`, `reverseContribution` | `sacco.groups.approve` |
+| `swapTurns`, `skipTurn`, `submitBid`, `resolveBidCycle` | `sacco.groups.bidding` |
+| `disburseCycle` | `sacco.groups.disburse` |
+| `updateSettings`, `updateMemberRole` | `sacco.groups.manage` |
+
+- The phantom `storeMember` entry is removed. `updateMemberRole` is **implemented** (it was named in the middleware but did not exist), and keeps the denormalised `chairperson_client_id` / `secretary_client_id` / `treasurer_client_id` pointers on the group in step with the membership row so the portal and reports cannot disagree.
+- Migration `2026_10_14_000004` seeds the four new permissions and grants them to `admin`; `Modules/Sacco/Config/permissions.php` registers them for the RBAC UI.
+- `group/show.blade.php` gains an inline role selector per member, gated on `sacco.groups.manage`.
+
+### G5. Portal meeting leak closed (closes A6)
+
+- Migration `2026_10_14_000002` adds nullable `sacco_group_id` (indexed, FK `ON DELETE SET NULL`, MySQL-guarded) to `sacco_meetings`.
+- `SaccoMeeting::scopeVisibleToMember()` plus `MEMBER_VISIBLE_TYPES = ['agm','sgm','other']`. A member sees meetings of groups they **actively** belong to, plus SACCO-wide meetings of a general type. Board, credit-committee, supervisory and management minutes are no longer reachable.
+- `ChamaController::meetings()` uses the scope and returns an empty set when no member profile is linked (previously it returned everything). `showMeeting()` now enforces the same rule with a 403, closing the direct-URL path.
+- `MeetingController::create()`/`store()` accept and validate `sacco_group_id`; `meeting/create.blade.php` gains the selector with an explanation of the visibility rule.
+
+### G6. Bulk import no longer corrupts group membership (closes A7)
+
+- `DataImportService::importMembers()` now writes `joined_date`, `role`, and `shares_held` on enrollment — `joined_date` was the NOT NULL column being silently zero-filled, and it is the sort key for `fixed` rotation.
+- Adds the `max_members` capacity check that `GroupService::addMember()` performs but the bulk path bypassed; over-capacity rows are skipped and reported in the import error list rather than silently dropped.
+- Rebuilds the merry-go-round schedule for every group that gained members, so imported members actually get a turn.
+- Migration `2026_10_14_000005` backfills `joined_date` from `created_at` for rows already written as `'0000-00-00'`, with a `CURDATE()` fallback.
+
+### G7. Live copy-paste bugs fixed (closes C6 items 1–5)
+
+- `FlutterwaveController::webhook()` rewritten for Flutterwave: validates the `verif-hash` header against `flutterwave.webhook_secret_hash` using `hash_equals`, ignores non-`charge.completed` events with a 2xx so they are not redelivered forever, and re-verifies the transaction against the Flutterwave API before posting — the payload amount is never trusted. Returns proper JSON responses instead of `http_response_code()` + `exit()`.
+- `Modules/Mpesa/Routes/web.php` — the two dead routes removed. `get_access_token` was deliberately **not** implemented: returning a Daraja OAuth token to a browser would expose a server-side credential.
+- Deleted 11 orphaned views confirmed unreachable (see the corrected C6 table).
+
+### G8. Secrets and config hygiene (closes the P0 portion of D)
+
+- `sacco-core/code/.gitignore` was **completely empty** — the reason `.env` was tracked. Populated with the standard Laravel 8 set; added `sacco-core/.gitignore` for the deployment env.
+- `sacco-core/.env`, `sacco-core/code/.env` and `code/.phpunit.result.cache` untracked via `git rm --cached`; files remain on disk.
+- Hardcoded production IP `149.102.129.28` removed from `docker-compose.yml`, `deploy.sh` and `.env.docker.example`. `DB_HOST`, `DB_USERNAME`, `DB_PASSWORD` now use `${VAR:?…}` so compose **fails fast** instead of silently defaulting to `ulm`/`ulm`. `deploy.sh` derives its printed URLs from a new `APP_HOST`.
+
+> **Two items still require action by the maintainers and cannot be done from a branch:**
+> 1. **Rotate `APP_KEY`.** The committed key `base64:M4NMiZg+8ZtNKeo72FMt7Bh1hGP4KPPqFOQN4LDfRTM=` must be treated as compromised. Rotating it invalidates existing encrypted cookies/sessions and any encrypted columns, so it needs a maintenance window — it is not a change to make silently from a PR.
+> 2. **Purge `.env` from git history.** Untracking stops future leakage but the key remains in every past commit. `git filter-repo` rewrites SHAs and force-pushes `main`, which affects every clone and open branch; that needs explicit sign-off.
+
+### G9. Tests
+
+- `tests/Feature/SaccoGroupContributionApprovalTest.php` — 14 tests: approval, double-approval, rejection gating and reason capture, reversal gating, reversal excluding a contribution from member totals, M-Pesa confirmation, **callback idempotency on a retried delivery**, unknown checkout id, amount-mismatch handling, disbursement recording, **the double-disbursement regression**, and disbursed cycles appearing in member history.
+- `tests/Feature/SaccoMeetingVisibilityTest.php` — 5 tests: own-group visibility, governance types never visible, SACCO-wide general meetings visible to all, exited members losing access, group-scoped committee meetings private to their members.
+- Both declare the status columns as **real enums**, mirroring production. The pre-existing rotation test used plain `string` columns, which is exactly why the A3 out-of-enum write was never caught.
+
+### Verification status
+
+No PHP runtime is available in this environment (no `php`, no root for `apt`), so `phpunit` could not be executed and `composer` dependencies are not installed. Changes were verified by a string- and comment-aware brace/paren balance checker across all 19 modified and added PHP files, by confirming every new symbol resolves (`GroupService` is same-namespace in `DataImportService`; `Carbon` import added; `Modules\User\Entities\User` path confirmed; `$today`/`$now`/`$errors`/`$userId` all in scope at the enrollment block), and by re-reading each call site.
+
+**These changes need `composer install && php artisan migrate && vendor/bin/phpunit` run against MySQL before merge.** The enum-widening migrations are the ones to watch, since they issue raw `ALTER … MODIFY` and are guarded to MySQL only.
+
+One assumption worth confirming during review: `GuzzleHttp\json_decode` is still shipped by Guzzle 7.9.2 (deprecated, but present), so the existing import in `FlutterwaveController` is not a fatal error. The new webhook calls `\json_decode` explicitly anyway, because the Guzzle shim *throws* on malformed input where the global function returns `null` — a bad payload should answer 400, not 500.

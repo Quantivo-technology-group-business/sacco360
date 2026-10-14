@@ -383,6 +383,11 @@ Route::prefix('sacco')->group(function () {
         Route::post('{id}/resolve-bid/{cycleId}', 'GroupController@resolveBidCycle');
         Route::post('{id}/disburse-cycle/{cycleId}', 'GroupController@disburseCycle');
         Route::get('{id}/contributions', 'GroupController@contributions');
+        Route::get('{id}/get_contributions', 'GroupController@get_contributions');
+        Route::post('{id}/member/{memberId}/role', 'GroupController@updateMemberRole');
+        Route::post('{id}/contribution/{contributionId}/approve', 'GroupController@approveContribution');
+        Route::post('{id}/contribution/{contributionId}/reject', 'GroupController@rejectContribution');
+        Route::post('{id}/contribution/{contributionId}/reverse', 'GroupController@reverseContribution');
     });
 
     // =========================================================================

@@ -13,6 +13,20 @@
 </section>
 <section class="content">
     <div class="row">
+        {{-- Toolbar: the contribution register was previously unreachable from
+             this page, so the approval queue had no entry point in the UI. --}}
+        <div class="col-12 mb-3">
+            @can('sacco.groups.contributions')
+            <a href="{{ url('sacco/group/'.$group->id.'/contributions') }}" class="btn btn-primary">
+                <i class="fas fa-book"></i> Contribution Register
+                @if(($pendingCount ?? 0) > 0)
+                    <span class="badge badge-warning">{{ $pendingCount }} pending</span>
+                @endif
+            </a>
+            @endcan
+        </div>
+    </div>
+    <div class="row">
         {{-- Group Info --}}
         <div class="col-md-4">
             <div class="card">
@@ -131,7 +145,25 @@
                         @foreach($group->members as $m)
                             <tr>
                                 <td>{{ $m->client->full_name ?? '—' }}</td>
-                                <td>{{ ucfirst($m->role) }}</td>
+                                <td>
+                                    @can('sacco.groups.manage')
+                                    {{-- Inline role change; posts to updateMemberRole. --}}
+                                    <form method="POST" action="{{ url('sacco/group/'.$group->id.'/member/'.$m->id.'/role') }}"
+                                          class="form-inline role-form" style="display:inline-flex;gap:4px;">
+                                        @csrf
+                                        <select name="role" class="form-control form-control-sm" style="width:auto">
+                                            @foreach(['member','chairperson','secretary','treasurer','committee'] as $r)
+                                                <option value="{{ $r }}" @if($m->role === $r) selected @endif>{{ ucfirst($r) }}</option>
+                                            @endforeach
+                                        </select>
+                                        <button type="submit" class="btn btn-sm btn-outline-primary" title="Save role">
+                                            <i class="fas fa-save"></i>
+                                        </button>
+                                    </form>
+                                    @else
+                                        {{ ucfirst($m->role) }}
+                                    @endcan
+                                </td>
                                 <td>{{ $m->joined_date }}</td>
                                 <td>{{ $m->shares_held }}</td>
                                 <td><span class="badge badge-{{ $m->status==='active'?'success':'secondary' }}">{{ $m->status }}</span></td>

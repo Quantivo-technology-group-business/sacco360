@@ -21,32 +21,64 @@ if (!function_exists('send_sms')) {
 
     /**
      * Send sms to an HTTP API using curl
+     *
+     * Returns true only when the gateway accepted the request (curl error 0 and
+     * a 2xx response). Callers that ignore the return value are unaffected; this
+     * exists so transaction alerts can be logged truthfully instead of being
+     * recorded as sent when nothing was delivered.
+     *
      * @param string $to The number to send the message to
      * @param string $msg The message to be sent
      * @param null $gateway_id Provide gateway id
+     * @param int $connectTimeout Seconds to allow for the TCP/TLS handshake
+     * @param int $timeout Seconds to allow for the whole request
+     * @return bool
      */
-    function send_sms($to, $msg, $gateway_id = null)
+    function send_sms($to, $msg, $gateway_id = null, $connectTimeout = 5, $timeout = 15)
     {
         if (!$gateway_id) {
-            $active_sms_gateway = SmsGateway::find(Setting::where('setting_key',
-                'communication.active_sms_gateway')->first()->setting_value);
+            // The setting row is not guaranteed to exist. Dereferencing ->first()
+            // unconditionally used to fatal on an unconfigured install, which
+            // mattered because this is reachable from payment callbacks.
+            $setting = Setting::where('setting_key', 'communication.active_sms_gateway')->first();
+
+            if (!$setting || $setting->setting_value === null || $setting->setting_value === '') {
+                return false;
+            }
+
+            $active_sms_gateway = SmsGateway::find($setting->setting_value);
         } else {
             $active_sms_gateway = SmsGateway::find($gateway_id);
         }
-        if ($active_sms_gateway) {
-            $append = "&";
-            $append .= $active_sms_gateway->to_name . "=" . $to;
-            $append .= "&" . $active_sms_gateway->msg_name . "=" . urlencode($msg);
-            $url = $active_sms_gateway->url . $append;
-            //send sms here
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_VERBOSE, true);
-            $curl_scraped_page = curl_exec($ch);
-            curl_close($ch);
+
+        if (!$active_sms_gateway) {
+            return false;
         }
 
+        $append = "&";
+        $append .= $active_sms_gateway->to_name . "=" . $to;
+        $append .= "&" . $active_sms_gateway->msg_name . "=" . urlencode($msg);
+        $url = $active_sms_gateway->url . $append;
+
+        //send sms here
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_VERBOSE, true);
+        // Without a timeout an unreachable gateway blocks the caller for as long
+        // as curl's default allows. This runs inline on transaction paths,
+        // including M-Pesa callbacks that Safaricom retries when they time out,
+        // so a slow SMS provider must not be able to stall a payment. Callers on
+        // latency-sensitive paths pass tighter values than the batch defaults.
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, (int) $connectTimeout);
+        curl_setopt($ch, CURLOPT_TIMEOUT, (int) $timeout);
+
+        curl_exec($ch);
+        $errno = curl_errno($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        return $errno === 0 && $httpCode >= 200 && $httpCode < 300;
     }
 }
 if (!function_exists('template_replace_tags')) {

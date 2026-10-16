@@ -263,7 +263,7 @@ Untested: bidding, bid resolution, penalties, disbursement, contribution posting
 
 The SACCO core is in good shape. These are the real holes.
 
-### C1. Transaction SMS alerts are never sent (P1)
+### C1. Transaction SMS alerts are never sent — ✅ FIXED, see G12
 `TransactionNotificationService::notify()` is called from at least seven places — `MpesaC2bService`, `MpesaB2cService`, `PesalinkService`, `TransferService`, `TellerDeskController`, `Portal\SavingsController`. It inserts into `communication_campaign_logs`:
 ```php
 'communication_campaign_id' => null,
@@ -273,6 +273,8 @@ The SACCO core is in good shape. These are the real holes.
 The only consumer is `campaigns:process` (`ProcessScheduledCampaigns`), which selects `CommunicationCampaign::where('trigger_type','schedule')`. **It never queries the log table for orphans.** No other code selects `status='pending'` from that table.
 
 Result: members receive no SMS for deposits, withdrawals, transfers, M-Pesa, PesaLink, or teller transactions — the messages accumulate in the database forever. This is a high-visibility failure for a digital banking product.
+
+> **The call-site list above was incomplete.** A full grep finds **16 call sites across 9 files**, including `UtilityPaymentService`, `Savings\SavingsController` (both deposit and withdrawal) and `Portal\SavingsController` — so the blast radius was wider than originally recorded. See G12.
 
 ### C2. No credit-life / loan insurance (P1)
 Zero occurrences of `insurance` or `credit_life` anywhere in `Modules/`. Kenyan SACCOs nearly universally carry credit life cover on the loan book, with a per-loan premium, an insurer, a claim-on-death workflow, and settlement of the outstanding balance. Today death is handled only through the welfare fund (`SaccoWelfareClaim`), which is a separate member-contributed pot with its own qualifying months and waiting period — it does not extinguish loan liability.
@@ -398,7 +400,7 @@ Recorded so the roadmap does not duplicate existing capability.
 12. **Group lifecycle**: edit route + form for all group fields, suspend/dissolve with a member-balance settlement step, member role change. (B5)
 13. **Chama cron**: `sacco:post-group-contributions` (monthly), `sacco:advance-rotation-cycles` (daily — activate due cycles, close completed ones, open bidding), `sacco:accrue-group-fines` (daily), `sacco:group-turn-reminders` (weekly). Register in `SaccoServiceProvider::boot()`. (B7)
 14. **Notifications**: contribution received/due, turn upcoming, bid opened/won/lost, pot disbursed, meeting notice. Route through a fixed `send_sms()` call — do **not** use the orphan-log pattern that broke C1. (B8)
-15. **Fix C1**: either make `TransactionNotificationService` call `send_sms()` directly (or dispatch a queued job), or add a `notifications:dispatch` command that drains orphan `pending` logs. This unlocks SMS for the whole SACCO, not just chamas.
+15. **Fix C1** — ✅ **DONE, see G12.** `TransactionNotificationService` now calls `send_sms()` directly rather than writing an orphan log, records a truthful `sent`/`failed` status, and defers outside any open transaction. The queued-job option was rejected deliberately: `QUEUE_CONNECTION=database` is configured but no worker runs, so queueing would have reproduced the same silent failure. The drain-orphans command option was also rejected, since it would retrospectively text members about stale transactions. This unlocks SMS for the whole SACCO, not just chamas.
 16. **Portal officer roles**: gate treasurer (confirm cash), secretary (minutes, attendance), chairperson (approve member, sign off cycle) on `membership.role`. (B10)
 17. **Member self-service**: join request, place own bid, view fines, download group statement, record attendance/apology. (B9)
 18. **Group reports + exports**: contribution register, defaulters, rotation history, group P&L, member group statement — as a `ReportsLinks` entry plus an Export class and PDF views. (B6)
@@ -433,12 +435,21 @@ Recorded so the roadmap does not duplicate existing capability.
 | SACCO missing feature areas | **10** |
 | Platform/engineering gaps | **10** |
 | Still-open bugs from the June 2026 audit | **0** — all 5 resolved (see corrected C6 and Part G) |
-| Existing tests | **7 files, 51 test methods** — 45 cover chama |
+| Existing tests | **8 files, 65 test methods** — 45 cover chama |
 | P0 items remediated | **7 of 8** Part A defects fixed (G1–G10); A8 reclassified as dead-code cleanup (G11) — 2 follow-ups need maintainer action |
+| Highest-value P1 item (C1 transaction SMS) | ✅ **fixed** (G12) |
 
-**Bottom line (updated after Parts G1–G11):** the P0 batch is closed — 7 of the 8 Part A defects are fixed and the eighth was a mis-triage, not a pending task. With that done, the SACCO half of this product is sellable once the **C1 transaction-SMS fix** lands; C1 is now the single highest-value remaining item, because transaction notifications are silently not being sent on M-Pesa C2B/B2C, PesaLink, transfers, teller and portal savings.
+**Bottom line (updated after Parts G1–G12):** the P0 batch is closed — 7 of the 8 Part A defects are fixed and the eighth was a mis-triage, not a pending task — and **C1, the highest-value P1 item, is fixed too**. Transaction SMS alerts now actually send across all 16 call sites.
 
-The Chama half is no longer *broken*, but it is still a UI sketch over a partial data model. It needs P1 in full (the rest of the fine ledger, GL posting, group accounts, lifecycle, cron, notifications, officer roles, reports, self-service, and USSD/API channels) before it can manage a real chama, and P2 items 22–23 before it can do what chamas actually exist for: **lending to each other**. Two money-handling policy questions are also open and need a client decision, not more code — see G10 (penalty direction, and whether payouts are based on the scheduled pot or on cash actually collected).
+With P0 and C1 done, the SACCO half of this product is sellable, subject to the three caveats below. The Chama half is no longer *broken*, but it is still a UI sketch over a partial data model. It needs the rest of P1 (the remainder of the fine ledger, GL posting, group accounts, lifecycle, cron, notifications, officer roles, reports, self-service, and USSD/API channels) before it can manage a real chama, and P2 items 22–23 before it can do what chamas actually exist for: **lending to each other**.
+
+Three things need a human decision rather than more code:
+
+1. **Two money-handling policy questions** — see G10. Whether a fine should be deducted from the beneficiary's payout or collected from the defaulter, and whether payouts should be based on the scheduled pot or on cash actually collected. Both are recorded and surfaced but deliberately not changed.
+2. **Two maintainer-only security actions** — see G8. Rotate `APP_KEY` (the committed key must be treated as compromised) and purge `.env` from git history. Both are destructive or need a maintenance window.
+3. **Pre-existing unverified payment webhooks** — see roadmap item 21a. `MpesaC2bService::confirm()` posts a real FOSA deposit from an unverified request body, and `mpesa/b2c/result`, `pesalink/inbound` and the unsigned gateway webhooks are the same shape. Not touched here; needs a maintenance window and per-gateway verification.
+
+Also note that deploying G12 starts real SMS traffic and real per-message cost. Set `SACCO_SMS_TRANSACTION_ALERTS=false` at deploy if that is not wanted immediately.
 
 One caveat applies to everything above: **none of it has been executed.** There is no PHP runtime in this environment, so `phpunit` was never run and `composer` dependencies are not installed. See the verification note at the end of Part G for what was checked mechanically instead, and what must be run before merge.
 
@@ -531,7 +542,8 @@ The P0 items from Part F have been implemented. Each entry names the defect it c
 - `tests/Feature/SaccoGroupContributionApprovalTest.php` — 14 tests: approval, double-approval, rejection gating and reason capture, reversal gating, reversal excluding a contribution from member totals, M-Pesa confirmation, **callback idempotency on a retried delivery**, unknown checkout id, amount-mismatch handling, disbursement recording, **the double-disbursement regression**, and disbursed cycles appearing in member history.
 - `tests/Feature/SaccoMeetingVisibilityTest.php` — 5 tests: own-group visibility, governance types never visible, SACCO-wide general meetings visible to all, exited members losing access, group-scoped committee meetings private to their members.
 - `tests/Feature/SaccoGroupCyclePenaltyTest.php` — 25 tests covering G10: on-time payment producing no fines, late vs missing classification, **the flat-deduction regression** (three late members must cost 300, not 100), zero-rate groups, assessment idempotency, exited members, pending contributions not counting as paid, cycle completion for `fixed` and `random` models, double-completion, skipped/beneficiary-less/disbursed cycles, highest-bid selection, **the double-resolution regression that used to wipe the winner**, bidding with no bids, fines applying on the bidding path too, waivers recomputing the payout, `collected_amount` shortfalls, and the active scope.
-- All three declare the status columns as **real enums**, mirroring production. The pre-existing rotation test used plain `string` columns, which is exactly why the A3 out-of-enum write was never caught.
+- `tests/Feature/SaccoTransactionAlertTest.php` — 14 tests covering G12: an alert never left `pending`, undeliverable alerts recorded `failed` with the message text intact, a configured gateway actually being attempted, `send_sms()` returning false instead of fataling on a missing setting row / unknown gateway / refused connection, the mobile and config gates, missing `settings` / `sms_gateways` / `communication_campaign_logs` tables not breaking the caller, **the send being deferred until the transaction commits**, **a rolled-back transaction sending nothing**, and immediate delivery outside a transaction.
+- All four declare the status columns as **real enums**, mirroring production. The pre-existing rotation test used plain `string` columns, which is exactly why the A3 out-of-enum write was never caught.
 
 ### G10. Per-member late-payment fines, and cycle completion for every rotation model (closes A4)
 
@@ -572,6 +584,26 @@ Writing the 10 missing views (6 portal chama + 4 admin group) would not make cha
 So the cost is a whole-theme port, not a 10-file fix, and the benefit of the 10-file fix in isolation is zero. Item 8 is recorded as **reclassified into C9** and moved to P3 of the roadmap, where the real decision belongs: either delete the 389 dead dashlite module views, or commit to building the root theme plus the missing views.
 
 **P0 status is therefore 7 of 8 items fixed in code, with item 8 reclassified as out-of-scope dead-code cleanup rather than left silently open.** If a client actually wants dashlite, that is a project of its own and should be scoped from C9, not from the chama list.
+
+### G12. Transaction SMS alerts are now actually sent (closes C1)
+
+**The defect.** `TransactionNotificationService::notify()` wrote a row to `communication_campaign_logs` with `status = 'pending'` and `communication_campaign_id = null`, and stopped. The table's only consumer, `campaigns:process`, selects `CommunicationCampaign::where('trigger_type','schedule')` and never looks for orphan log rows; nothing else in the codebase selects `status='pending'` from it. Members received no SMS for any deposit, withdrawal, transfer, M-Pesa, PesaLink, utility or teller transaction, while the log looked like a queue merely waiting to be drained — which is exactly why the failure stayed invisible.
+
+The blast radius was wider than C1 recorded: a full grep finds **16 call sites across 9 files**, not "at least seven" — `MpesaC2bService`, `MpesaB2cService`, `PesalinkService` (×2), `TransferService` (×2), `UtilityPaymentService`, `TellerDeskController`, `Savings\SavingsController` (×2) and `Portal\SavingsController`.
+
+**The fix.** `notify()` now dispatches through the same `send_sms()` helper the campaign processor uses, and writes the audit row with the status that reflects what happened (`sent` or `failed`) instead of permanently `pending`.
+
+**Why synchronous, not queued.** The obvious alternative — dispatch a job — was checked and rejected. `config/queue.php` defaults to `sync` but `.env` sets `QUEUE_CONNECTION=database`, and **no queue worker is scheduled in `app/Console/Kernel.php` or otherwise running**. Queued alerts would park in the `jobs` table indefinitely and reproduce the original bug in a new form. Draining the orphan backlog with a new command was also rejected: it would retrospectively text members about transactions from weeks or months ago.
+
+Because the send is inline on money paths, three constraints are enforced:
+
+- **Tight timeouts.** `send_sms()` previously set no curl timeout at all, so an unreachable gateway could block the caller indefinitely. It now defaults to 5s connect / 15s total and accepts overrides; `notify()` passes **2s / 6s**. This matters specifically for M-Pesa C2B callbacks, which Safaricom retries when they take too long.
+- **No locks held.** `TransferService::execute()` calls `notify()` **twice inside an open `DB::transaction()`**, and `PesalinkService` and `MpesaB2cService` each call it once inside one. A synchronous HTTP round trip there would hold row locks on savings, share and loan accounts for as long as the gateway took to answer. `notify()` now checks `DB::transactionLevel()` and defers to `DB::afterCommit()`, so the send happens after the commit. A rolled-back transaction therefore sends nothing — correct, since the member must not be told about a money movement that did not happen. (`afterCommit()` throws if no transactions manager is bound; verified `db.transactions` is registered as a singleton by `DatabaseServiceProvider` in Laravel 8.83, and the binding is still checked at runtime rather than assumed.)
+- **No escape.** `send_sms()` also had a latent fatal: it dereferenced `Setting::where(...)->first()->setting_value` with no null check, so an install without a configured gateway would fatal. That path is reachable from payment callbacks. The helper now returns `false` cleanly, and `notify()` additionally pre-resolves the gateway, checks `function_exists('send_sms')` (the Communication module may be disabled), and swallows every `Throwable` — an SMS provider being down, unconfigured or absent can never fail a transaction.
+
+**Backlog.** Migration `2026_10_14_000007` marks the historical orphan rows `failed` rather than leaving them `pending`, so the log stops reading like an undrained queue, and logs the count so the size of the gap is recoverable. They are deliberately **not** retro-sent.
+
+**Configuration.** Sending remains gated by `sacco.sms_transaction_alerts` (`SACCO_SMS_TRANSACTION_ALERTS`, default `true`) and by the member having a mobile number. Note the practical consequence of this fix: **deploying it starts real SMS traffic and real per-message cost** on every transaction path listed above. If that is not wanted immediately, set `SACCO_SMS_TRANSACTION_ALERTS=false` at deploy and enable it deliberately.
 
 ### Verification status
 

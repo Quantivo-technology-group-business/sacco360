@@ -351,7 +351,18 @@ class ChamaController extends Controller
     {
         $client = $this->getClient();
 
-        $meetings = SaccoMeeting::withCount(['agendaItems', 'resolutions', 'attendances'])
+        if (!$client) {
+            // No linked member profile: show nothing rather than every meeting.
+            $meetings = SaccoMeeting::whereRaw('1 = 0')->paginate(20);
+            return theme_view('portal::chama.meetings', compact('meetings', 'client'));
+        }
+
+        // Scoped to the member's own groups plus SACCO-wide general meetings.
+        // Without this filter every member could read board, credit-committee
+        // and supervisory-committee minutes.
+        $meetings = SaccoMeeting::visibleToMember($client->id)
+            ->with('group')
+            ->withCount(['agendaItems', 'resolutions', 'attendances'])
             ->orderByDesc('scheduled_date')
             ->paginate(20);
 
@@ -361,11 +372,31 @@ class ChamaController extends Controller
     public function showMeeting($id)
     {
         $client  = $this->getClient();
-        $meeting = SaccoMeeting::with(['agendaItems', 'resolutions', 'attendances.client'])->findOrFail($id);
+        $meeting = SaccoMeeting::with(['group', 'agendaItems', 'resolutions', 'attendances.client'])->findOrFail($id);
 
-        $attended = $client
-            ? $meeting->attendances->where('client_id', $client->id)->first()
-            : null;
+        // Authorisation: the member must be entitled to see this meeting.
+        if (!$client) {
+            abort(403, 'No member profile linked to your account.');
+        }
+
+        $allowedGroupIds = SaccoGroupMember::where('client_id', $client->id)
+            ->where('status', 'active')
+            ->pluck('sacco_group_id')
+            ->map(fn($gid) => (int) $gid)
+            ->all();
+
+        // Cast both sides: PDO returns the FK as a string on some drivers, and a
+        // strict in_array would then wrongly deny access.
+        $isOwnGroupMeeting = $meeting->sacco_group_id
+            && in_array((int) $meeting->sacco_group_id, $allowedGroupIds, true);
+        $isGeneralMeeting  = !$meeting->sacco_group_id
+            && in_array($meeting->meeting_type, SaccoMeeting::MEMBER_VISIBLE_TYPES, true);
+
+        if (!$isOwnGroupMeeting && !$isGeneralMeeting) {
+            abort(403, 'You do not have access to this meeting.');
+        }
+
+        $attended = $meeting->attendances->where('client_id', $client->id)->first();
 
         return theme_view('portal::chama.meeting_show', compact('meeting', 'client', 'attended'));
     }

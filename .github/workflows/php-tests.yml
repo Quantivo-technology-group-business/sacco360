@@ -1,0 +1,101 @@
+name: PHP tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sacco-core/code/**'
+      - '.github/workflows/php-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'sacco-core/code/**'
+      - '.github/workflows/php-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: php-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mysql-and-phpunit:
+    name: MySQL migrations and PHPUnit
+    # Keep Composer's platform checks strict. The committed lock currently
+    # contains dependencies with mutually exclusive PHP requirements (some are
+    # PHP-7-only; others require PHP 8.4+), so this workflow will stop at
+    # composer install until the dependency lock is refreshed.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: sacco-core/code
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: sacco_ci
+          MYSQL_USER: sacco_ci
+          MYSQL_PASSWORD: sacco_ci_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD}"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: bcmath, ctype, curl, dom, fileinfo, gd, intl, mbstring, pdo_mysql, pdo_sqlite, tokenizer, xml, zip
+          tools: composer:v2
+          coverage: none
+
+      - name: Create isolated test environment
+        run: |
+          cat > .env <<'ENVEOF'
+          APP_NAME="SACCO360 CI"
+          APP_ENV=testing
+          APP_DEBUG=false
+          APP_URL=http://localhost
+          APP_INSTALLED=false
+          LOG_CHANNEL=stderr
+
+          DB_CONNECTION=mysql
+          DB_HOST=127.0.0.1
+          DB_PORT=3306
+          DB_DATABASE=sacco_ci
+          DB_USERNAME=sacco_ci
+          DB_PASSWORD=sacco_ci_password
+
+          OLD_DB_HOST=127.0.0.1
+          OLD_DB_PORT=3306
+          OLD_DB_DATABASE=sacco_ci
+          OLD_DB_USERNAME=sacco_ci
+          OLD_DB_PASSWORD=sacco_ci_password
+
+          BROADCAST_DRIVER=log
+          QUEUE_CONNECTION=sync
+          QUEUE_DRIVER=sync
+          CACHE_DRIVER=array
+          SESSION_DRIVER=array
+          MAIL_DRIVER=log
+          ENVEOF
+          php -r "file_put_contents('.env', 'APP_KEY=base64:' . base64_encode(random_bytes(32)) . PHP_EOL, FILE_APPEND);"
+
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Run all application and module migrations on MySQL
+        run: php artisan migrate --force
+
+      - name: Run PHPUnit suite
+        run: vendor/bin/phpunit --testdox

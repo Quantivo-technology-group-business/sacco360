@@ -7,9 +7,7 @@ use Modules\User\Entities\Permission;
 use Modules\User\Entities\Role;
 use Modules\User\Entities\User;
 use Modules\User\Services\AuthorizationService;
-use Tests\TestCase;
-
-class AuthorizationServiceTest extends TestCase
+class AuthorizationServiceTest extends \TestCase
 {
     public function test_permission_hierarchy_allows_child_via_parent(): void
     {
@@ -91,6 +89,7 @@ class AuthorizationServiceTest extends TestCase
     protected function makeUser(): User
     {
         return User::create([
+            'name' => 'Test User',
             'first_name' => 'Test',
             'last_name' => 'User',
             'email' => uniqid('test') . '@example.com',

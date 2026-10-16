@@ -13,7 +13,7 @@
 |--------|-------------|-------|
 | **SACCO (BOSA/FOSA, loans, compliance, payments)** | ~85–90% | Genuinely production-shaped. Deep, well-integrated. |
 | **Chama / group banking** | ~25–30% | A thin prototype bolted onto the Sacco module. Several code paths are **broken, not just missing**. |
-| **Platform engineering** | ~40% | The review baseline had only 4 test files / 7 methods and no CI. This branch expands the suite to 8 files / 65 methods and adds a MySQL-migration + PHPUnit GitHub Actions gate; overall coverage remains thin, and the leaked key remains in git history. |
+| **Platform engineering** | ~40% | The review baseline had only 4 test files / 7 methods and no CI. This branch expands the suite to 8 files / 65 methods and adds a PHP 7.4 + MySQL migration/PHPUnit GitHub Actions gate; overall coverage remains thin, and the leaked key remains in git history. |
 
 The SACCO engine is strong: loan appraisal (multiplier + ⅔ rule + guarantor coverage) is enforced at application *and* approval, guarantor shares lock on disbursement and unlock on closure, SASRA prudential ratios and CAELS classification run on schedules, and 10 `sacco:*` cron commands are correctly registered in `SaccoServiceProvider`.
 
@@ -255,7 +255,7 @@ At the original review baseline, the repository had **4 test files / 7 methods**
 
 The added suites cover contribution approval/disbursement (14), meeting visibility (5), cycle penalties/completion (25), and transaction SMS (14). **45 methods cover chama workflows**; 14 cover C1; the remaining 6 are the existing example, settings, rotation and authorization tests. Every module `Tests/Feature` and `Tests/Unit` directory outside User still holds only a `.gitkeep`.
 
-Still largely untested: bidding edge cases, member add/remove, skip/swap, the portal contribution flow, loans, savings, shares, accounting, most payment gateway callbacks, compliance, and the API. A3 and the other P0 defects now have regression coverage, but the rotation test still hand-builds SQLite tables rather than running migrations, so it does not catch schema drift by itself. The new CI workflow runs the migrations on MySQL and then PHPUnit, but it does not yet run tests against the legacy SQL dump path.
+Still largely untested: bidding edge cases, member add/remove, skip/swap, the portal contribution flow, loans, savings, shares, accounting, most payment gateway callbacks, compliance, and the API. A3 and the other P0 defects now have regression coverage, but the rotation test still hand-builds SQLite tables rather than running migrations, so it does not catch schema drift by itself. The new CI workflow runs the migrations on MySQL and then PHPUnit with PHP 7.4, but it does not yet run tests against the legacy SQL dump path. PHP 7.4 is deliberate: `composer.lock` currently rejects PHP 8.2 despite the broader PHP constraint in `composer.json`.
 
 ---
 
@@ -331,7 +331,8 @@ The 446 KB / 114-table dump contains **no `sacco_*` tables**. `deploy.sh` restor
 | **Secrets in git history** | `sacco-core/code/.env` was tracked and contained the committed `APP_KEY=base64:M4NMiZg+8ZtNKeo72FMt7Bh1hGP4KPPqFOQN4LDfRTM=`. This branch removes it from HEAD and ignores future `.env` files, but the key remains in history: rotate it and purge history. |
 | **Hardcoded production IP** | Removed from `docker-compose.yml`, `deploy.sh` and `.env.docker.example` in this branch, but `sacco-core/run.sh` and `sacco-core/fix-permissions.sh` still reference `149.102.129.28`. |
 | **Default credentials** | Compose now requires `DB_HOST`, `DB_USERNAME` and `DB_PASSWORD` instead of defaulting to `ulm`/`ulm`; `.env.example` still contains placeholder `admin`/`password` values for the current and legacy DB connections, which must never be used in production. |
-| **CI (partial, added in this branch)** | `.github/workflows/php-tests.yml` installs Composer dependencies, runs the full migration chain against MySQL 8, and runs PHPUnit on pull requests. It does not yet exercise the dump-then-migrate path, static analysis/formatting, or the USSD build. |
+| **CI (partial, added in this branch)** | `.github/workflows/php-tests.yml` installs Composer dependencies on PHP 7.4, runs the full migration chain against MySQL 8, and runs PHPUnit on pull requests. It does not yet exercise the dump-then-migrate path, static analysis/formatting, or the USSD build. |
+| **Composer/PHP constraint mismatch** | `composer.json` allows PHP 8, but the committed lock pins packages whose `php` constraints are `^7` only; `composer install` fails on PHP 8.2. The new CI targets PHP 7.4 without bypassing platform checks. Refresh and test the dependency lock before claiming PHP 8 compatibility. |
 | **Test coverage** | 8 test files (65 methods) for ~2,300 PHP files, including 45 chama tests; no tests yet for loans, savings, shares, accounting, payments, compliance, or the API. This branch also adds module-directory discovery so the four `Modules/User/Tests/` methods actually run; other modules' `Tests/` contain only `.gitkeep`. |
 | **Queue driver mismatch** | `config/queue.php` defaults to `sync`, while `.env.example` and `docker-compose.yml` set `QUEUE_CONNECTION=database` (Compose also runs a worker). A non-Docker install can silently run everything inline, including STK pushes, if it has no worker. |
 | **Rate limiting** | Only the global `throttle:60,1` on the `api` group. No tighter limit on `api/v1/login`, `api/v1/logind`, `api/v1/sacco/ussd`, or the M-Pesa/ATM/PesaLink webhook endpoints. |
@@ -418,7 +419,7 @@ Recorded so the roadmap does not duplicate existing capability.
 27. **Data import for groups**: members, contribution history, current rotation position. (B16)
 28. **Loan restructuring**: arrears capitalisation, product conversion, top-up netting; **collateral recovery**: repossession → sale → apply recovery; **estate workflow**: document gating, beneficiary apportionment, estate account. (C3, C4, C5)
 29. **Resolve the theme question** — ⬇️ **absorbs the former P0 item 8; see G11 for why it was reclassified.** Either delete the 389 dead `themes/dashlite` module views, or commit to a real port: a root `themes/dashlite/` with `theme.json` and `views/layouts/master.blade.php` (without which nothing renders, since `core::layouts.master` currently resolves only from adminlte), plus the 157 adminlte-only view paths — 123 of them in Sacco alone. Building just the 10 chama views achieves nothing on its own. (C9, A8)
-30. **CI — partially delivered in this branch.** `.github/workflows/php-tests.yml` now runs `composer install`, the full migration chain against a fresh MySQL 8 database, and the complete discovered PHPUnit suite (application + module tests) on pull requests. Remaining: exercise the dump-then-migrate path, add static analysis/format checks and `npm run build` for the USSD service, and rewrite the rotation test to run real migrations so schema drift is caught. (C10, D)
+30. **CI — partially delivered in this branch.** `.github/workflows/php-tests.yml` now runs `composer install` on PHP 7.4, the full migration chain against a fresh MySQL 8 database, and the complete discovered PHPUnit suite (application + module tests) on pull requests. Remaining: exercise the dump-then-migrate path, add static analysis/format checks and `npm run build` for the USSD service, rewrite the rotation test to run real migrations, and refresh the lock file before targeting PHP 8. (C10, D)
 
 ### P3 — Hygiene
 31. Fix `modules_statuses.json` (`Nice`, duplicate `Share`/`Shares`); align `QUEUE_CONNECTION` defaults; add per-endpoint rate limits on auth and webhook routes; document the one-shot maintenance commands; remove the commented `penalties:process` line. (C8, D)
@@ -433,7 +434,7 @@ Recorded so the roadmap does not duplicate existing capability.
 | Chama defects (broken code paths) | **8** |
 | Chama missing feature areas | **17** |
 | SACCO missing feature areas | **10** |
-| Platform/engineering gaps | **10** |
+| Platform/engineering gaps | **11** |
 | Still-open bugs from the June 2026 audit | **0** — all 5 resolved (see corrected C6 and Part G) |
 | Existing tests | **8 files, 65 test methods** — 45 cover chama |
 | P0 items remediated | **7 of 8** Part A defects fixed (G1–G10); A8 reclassified as dead-code cleanup (G11) — 2 follow-ups need maintainer action |
@@ -608,7 +609,7 @@ Because the send is inline on money paths, three constraints are enforced:
 
 ### Verification status
 
-No PHP runtime is available in this environment (no `php`, no root for `apt`), so `phpunit` and Composer could not be executed locally. The new `.github/workflows/php-tests.yml` workflow is configured to run `composer install`, all migrations against MySQL 8, and PHPUnit for both `tests/` and `Modules/`; check the PR's GitHub Actions result before merge. It intentionally does not yet validate the legacy dump-then-migrate path or the USSD build. Changes were also checked here with a string- and comment-aware brace/paren balance checker across modified and added PHP files, by verifying new symbols and paths, and by re-reading each call site.
+No PHP runtime is available in this environment (no `php`, no root for `apt`), so `phpunit` and Composer could not be executed locally. The new `.github/workflows/php-tests.yml` workflow runs Composer, all migrations against MySQL 8, and PHPUnit for both `tests/` and `Modules/` on PHP 7.4; the committed lock rejects PHP 8.2 despite `composer.json` allowing it, so PHP 8 compatibility needs a dependency refresh. The first CI attempt on PHP 8.2 failed at dependency resolution before migrations or tests; the corrected PHP 7.4 run must pass before merge. The workflow intentionally does not yet validate the legacy dump-then-migrate path or the USSD build. Changes were also checked here with a string- and comment-aware brace/paren balance checker across modified and added PHP files, by verifying new symbols and paths, and by re-reading each call site.
 
 Structural checks that were run mechanically, not by eye: every `permission:` string used in `GroupController` exists in `Modules/Sacco/Config/permissions.php`; all 23 `GroupController` actions are permission-gated with no phantom entries and none left unguarded; every `GroupController@method` referenced in `Routes/web.php` exists and every public method has a route; Blade `@if/@endif`, `@can/@endcan`, `@foreach/@endforeach`, `@php/@endphp` and `<section>/<div>/<table>/<form>` tags balance in every edited view; table header and body cell counts match; and no view, route or controller references any of the deleted orphan views.
 

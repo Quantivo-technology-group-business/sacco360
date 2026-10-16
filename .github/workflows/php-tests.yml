@@ -23,7 +23,11 @@ concurrency:
 jobs:
   mysql-and-phpunit:
     name: MySQL migrations and PHPUnit
-    runs-on: ubuntu-latest
+    # The committed composer.lock pins several PHP-7-only packages even though
+    # composer.json also declares PHP 8 compatibility. Run the checked-in lock
+    # without ignoring platform requirements; refresh dependencies separately
+    # before moving CI to PHP 8.
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     defaults:
       run:
@@ -50,7 +54,7 @@ jobs:
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: '7.4'
           extensions: bcmath, ctype, curl, dom, fileinfo, gd, intl, mbstring, pdo_mysql, pdo_sqlite, tokenizer, xml, zip
           tools: composer:v2
           coverage: none

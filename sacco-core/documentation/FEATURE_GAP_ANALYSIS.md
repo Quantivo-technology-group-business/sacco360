@@ -13,7 +13,7 @@
 |--------|-------------|-------|
 | **SACCO (BOSA/FOSA, loans, compliance, payments)** | ~85–90% | Genuinely production-shaped. Deep, well-integrated. |
 | **Chama / group banking** | ~25–30% | A thin prototype bolted onto the Sacco module. Several code paths are **broken, not just missing**. |
-| **Platform engineering** | ~40% | 2 feature tests for ~2,300 files, no CI, secrets committed, one theme half-built. |
+| **Platform engineering** | ~40% | The review baseline had only 4 test files / 7 methods and no CI. This branch expands the suite to 8 files / 65 methods and adds a MySQL-migration + PHPUnit GitHub Actions gate; overall coverage remains thin, and the leaked key remains in git history. |
 
 The SACCO engine is strong: loan appraisal (multiplier + ⅔ rule + guarantor coverage) is enforced at application *and* approval, guarantor shares lock on disbursement and unlock on closure, SASRA prudential ratios and CAELS classification run on schedules, and 10 `sacco:*` cron commands are correctly registered in `SaccoServiceProvider`.
 
@@ -250,12 +250,12 @@ Beyond the leak in A6, `sacco_meetings` has no `sacco_group_id`, so a chama's re
 ### B16. No data import for groups
 `DataImportService` implements `importMembers()` and `unseedBatch()` only. Migrating an existing chama (members, contribution history, rotation position) means manual entry. The import UI at `sacco/import` references chama in its copy but only imports clients.
 
-### B17. Test coverage
-The repository contains **4 test files**: `tests/ExampleTest.php` (1 test), `tests/Feature/SettingControllerTest.php` (1 test), `tests/Feature/SaccoGroupRotationServiceTest.php` (1 test), and `Modules/User/Tests/Unit/AuthorizationServiceTest.php` (4 tests). Every module `Tests/Feature` and `Tests/Unit` directory outside User holds only a `.gitkeep`.
+### B17. Test coverage — partially improved in this branch
+At the original review baseline, the repository had **4 test files / 7 methods**: `tests/ExampleTest.php` (1), `tests/Feature/SettingControllerTest.php` (1), `tests/Feature/SaccoGroupRotationServiceTest.php` (1), and `Modules/User/Tests/Unit/AuthorizationServiceTest.php` (4). This branch adds four regression suites and expands the current total to **8 files / 65 methods**. `phpunit.xml` now discovers both `tests/` and `Modules/`; the User authorization test previously imported a nonexistent `Tests\TestCase` and omitted the required `users.name` field, so both were corrected before adding it to discovery.
 
-The single rotation test has **one test method**: `test_generate_schedule_uses_join_date_order_for_fixed_rotation`.
+The added suites cover contribution approval/disbursement (14), meeting visibility (5), cycle penalties/completion (25), and transaction SMS (14). **45 methods cover chama workflows**; 14 cover C1; the remaining 6 are the existing example, settings, rotation and authorization tests. Every module `Tests/Feature` and `Tests/Unit` directory outside User still holds only a `.gitkeep`.
 
-Untested: bidding, bid resolution, penalties, disbursement, contribution posting, member add/remove, skip/swap, the portal contribution flow, loans, savings, shares, accounting, every payment gateway webhook, compliance, the API — and every defect in Part A. Note the rotation test hand-builds its own SQLite schema rather than running migrations, which is precisely why the enum mismatch in A3 was never caught.
+Still largely untested: bidding edge cases, member add/remove, skip/swap, the portal contribution flow, loans, savings, shares, accounting, most payment gateway callbacks, compliance, and the API. A3 and the other P0 defects now have regression coverage, but the rotation test still hand-builds SQLite tables rather than running migrations, so it does not catch schema drift by itself. The new CI workflow runs the migrations on MySQL and then PHPUnit, but it does not yet run tests against the legacy SQL dump path.
 
 ---
 
@@ -320,7 +320,7 @@ Raw file counts measured 2026-10-14 corroborate the view-path analysis: **631 ad
 **A8 (chama views missing on dashlite) is a subset of this, not a separate P0** — see G11 for why it was reclassified rather than implemented.
 
 ### C10. `ulm.sql` predates the Sacco module (P2)
-The 446 KB / 114-table dump contains **no `sacco_*` tables**. `deploy.sh` restores the dump and then runs migrations, so a fresh install depends on ~40 Sacco migrations applying cleanly on top of a legacy schema. There is no CI to prove this. Combined with the `hasColumn`/`hasTable` guards scattered through those migrations, first-run failure is likely and invisible.
+The 446 KB / 114-table dump contains **no `sacco_*` tables**. `deploy.sh` restores the dump and then runs migrations, so a fresh install depends on ~40 Sacco migrations applying cleanly on top of a legacy schema. The GitHub Actions workflow added in this branch runs the full migration chain on a fresh MySQL 8 database, but does **not yet** exercise the dump-then-migrate deployment path. The `hasColumn`/`hasTable` guards scattered through those migrations make that dump-based path especially important to cover.
 
 ---
 
@@ -328,12 +328,12 @@ The 446 KB / 114-table dump contains **no `sacco_*` tables**. `deploy.sh` restor
 
 | Item | Finding |
 |------|---------|
-| **Secrets committed** | `sacco-core/code/.env` is **tracked in git** and contains a live `APP_KEY=base64:M4NMiZg+8ZtNKeo72FMt7Bh1hGP4KPPqFOQN4LDfRTM=`. Rotate the key and purge from history. |
-| **Hardcoded production IP** | `APP_URL=http://149.102.129.28:8080` in `.env`, and the same IP as the `docker-compose.yml` default for `APP_URL`, `DB_HOST`, `DB_PORT`. |
-| **Default credentials** | `docker-compose.yml` defaults `DB_USERNAME`/`DB_PASSWORD` to `ulm`/`ulm`; `.env` also carries `OLD_DB_*` with `admin`/`password`. |
-| **No CI** | No `.github/workflows`, no `phpunit`/`phpstan`/`pint` pipeline. The two existing tests never run automatically. |
-| **Test coverage** | 4 test files (7 test methods) for ~2,300 PHP files. No tests for loans, savings, shares, accounting, payments, compliance, or the API. Only `Modules/User/Tests/` contains a real module test; every other module's `Tests/` holds only `.gitkeep`. |
-| **Queue driver mismatch** | `.env.example` defaults `QUEUE_CONNECTION=sync`; `docker-compose.yml` sets `database` and runs a worker. A non-Docker install silently runs everything inline, including STK pushes. |
+| **Secrets in git history** | `sacco-core/code/.env` was tracked and contained the committed `APP_KEY=base64:M4NMiZg+8ZtNKeo72FMt7Bh1hGP4KPPqFOQN4LDfRTM=`. This branch removes it from HEAD and ignores future `.env` files, but the key remains in history: rotate it and purge history. |
+| **Hardcoded production IP** | Removed from `docker-compose.yml`, `deploy.sh` and `.env.docker.example` in this branch, but `sacco-core/run.sh` and `sacco-core/fix-permissions.sh` still reference `149.102.129.28`. |
+| **Default credentials** | Compose now requires `DB_HOST`, `DB_USERNAME` and `DB_PASSWORD` instead of defaulting to `ulm`/`ulm`; `.env.example` still contains placeholder `admin`/`password` values for the current and legacy DB connections, which must never be used in production. |
+| **CI (partial, added in this branch)** | `.github/workflows/php-tests.yml` installs Composer dependencies, runs the full migration chain against MySQL 8, and runs PHPUnit on pull requests. It does not yet exercise the dump-then-migrate path, static analysis/formatting, or the USSD build. |
+| **Test coverage** | 8 test files (65 methods) for ~2,300 PHP files, including 45 chama tests; no tests yet for loans, savings, shares, accounting, payments, compliance, or the API. This branch also adds module-directory discovery so the four `Modules/User/Tests/` methods actually run; other modules' `Tests/` contain only `.gitkeep`. |
+| **Queue driver mismatch** | `config/queue.php` defaults to `sync`, while `.env.example` and `docker-compose.yml` set `QUEUE_CONNECTION=database` (Compose also runs a worker). A non-Docker install can silently run everything inline, including STK pushes, if it has no worker. |
 | **Rate limiting** | Only the global `throttle:60,1` on the `api` group. No tighter limit on `api/v1/login`, `api/v1/logind`, `api/v1/sacco/ussd`, or the M-Pesa/ATM/PesaLink webhook endpoints. |
 | **Test schema drift** | `SaccoGroupRotationServiceTest` hand-builds SQLite tables instead of running migrations, so schema/code mismatches (A3) cannot be caught by tests. |
 | **Dead scheduler entry** | `app/Console/Kernel.php:38` has `//$schedule->command('penalties:process')->daily();` commented out, and the real command is `loan_penalties:process` (scheduled correctly in `LoanServiceProvider`). Harmless, but confusing. |
@@ -365,7 +365,7 @@ Recorded so the roadmap does not duplicate existing capability.
 
 ## PART F — Prioritized roadmap
 
-### P0 — Stop the bleeding ✅ DONE — see Part G
+### P0 — Stop the bleeding ✅ Code work done; maintainer-only security actions remain — see Part G
 
 > **Note on numbering.** This P0 task list and the Part A defect list are *not* the same eight things. Part A enumerates the eight broken chama code paths (A1–A8); the list below enumerates eight pieces of work, which cover A1, A2, A3, A5, A6 plus the platform-secret item (D) and the copy-paste bugs (C6), and it folds A7 in as item 8. **A4 and A8 were never in this list** — A4 was scoped as P1 item 9 and A8 as P2 item 29.
 >
@@ -384,14 +384,14 @@ Recorded so the roadmap does not duplicate existing capability.
 >
 > **7 of 8 Part A defects fixed; A8 reclassified as dead-code cleanup.** A4 was pulled forward from P1 because it turned out to be money-integrity work, not a feature: it was also the only reason `fixed`/`random` groups could never close a turn.
 
-1. **Implement `MpesaStkService::pushGroupContribution()`** and a matching C2B/STK callback branch that flips the contribution to `posted` and credits the member. (A1)
-2. **Add the pending-contribution approval queue**: `GroupController@contributions` becomes a DataTable with approve / reject / reverse actions, guarded by a new `sacco.groups.approve` permission. (A2)
-3. **Fix the enum**: migration to `enum('upcoming','active','completed','skipped','paid')` — or change `disburseCycle()` to write `completed` and track disbursement via `disbursed_at`. Then the re-disbursement guard works. (A3)
-4. **Add `permission:` middleware** to `updateSettings`, `swapTurns`, `skipTurn`, `submitBid`, `resolveBidCycle`, `disburseCycle`, `contributions`. Remove the phantom `storeMember` / `updateMemberRole` entries or implement them. (A5)
-5. **Add `sacco_group_id` to `sacco_meetings`** and filter `ChamaController::meetings()`/`showMeeting()` by the member's groups. Default existing rows to a SACCO-wide meeting type that members cannot see. (A6)
-6. **Rotate `APP_KEY`, untrack `.env`, purge it from history**, and remove the hardcoded `149.102.129.28` from `docker-compose.yml` defaults. (D)
-7. **Fix the four open copy-paste bugs** — Flutterwave webhook, M-Pesa missing methods, savings withdrawal view, savings/share linked-charge views. (C6)
-8. **Fix the group import**: route `DataImportService` enrollment through `GroupService::addMember()` (or at minimum set `joined_date`, honour `max_members`, and call `rebuildUpcomingSchedule()` for `merry_go_round` groups). Backfill `joined_date` for rows already imported as `'0000-00-00'`. (A7)
+1. ✅ **DONE — Implemented `MpesaStkService::pushGroupContribution()`** and a matching C2B/STK callback branch; the callback verifies the result with Daraja before posting. (A1, G1)
+2. ✅ **DONE — Added the pending-contribution approval queue** with approve / reject / reverse actions and `sacco.groups.approve`. (A2, G2)
+3. ✅ **DONE — Fixed the enum/status write.** The disbursement path writes the legal `completed` status and tracks payout separately, so the re-disbursement guard works. (A3, G3)
+4. ✅ **DONE — Permission-gated the GroupController actions**, removed the phantom middleware entry and implemented the missing member-role action. (A5, G4)
+5. ✅ **DONE — Added `sacco_group_id` to `sacco_meetings`** and scoped the Portal list and direct-show path to member-visible group meetings. (A6, G5)
+6. ⚠️ **PARTIAL — `.env` is untracked and the compose/deploy/example IP defaults are removed, but maintainer actions remain:** rotate `APP_KEY`, purge it from git history, remove the residual IP in `sacco-core/run.sh` and `fix-permissions.sh`, and replace `.env.example`'s placeholder DB credentials before deployment. (D, G8)
+7. ✅ **DONE — Fixed the live copy-paste bugs** (Flutterwave webhook, M-Pesa dead routes, unreachable savings/share linked-charge and report views). (C6, G7)
+8. ✅ **DONE — Fixed the group import**: writes `joined_date`, honours capacity, rebuilds the schedule, and backfills existing zero dates. (A7, G6)
 
 ### P1 — Make chama real (~4–6 weeks)
 9. **Per-member fine ledger** — ⚠️ **partially delivered by G10; extend, do not rebuild.** `sacco_group_penalties` now exists with accrual on late/missed contribution, waiver with officer and reason, per-cycle deduction, and an admin register. **Remaining:** widen `penalty_type` into a configurable fine-type catalogue (missed meeting, late arrival, absent-without-apology, failure to take up a turn), collect fines against a member's next payout rather than only deducting from the cycle pot, and expose a member's own fines in the portal. Also resolve the two open policy questions in G10 (penalty direction, and pot-vs-cash payout base). (A4, B2)
@@ -418,7 +418,7 @@ Recorded so the roadmap does not duplicate existing capability.
 27. **Data import for groups**: members, contribution history, current rotation position. (B16)
 28. **Loan restructuring**: arrears capitalisation, product conversion, top-up netting; **collateral recovery**: repossession → sale → apply recovery; **estate workflow**: document gating, beneficiary apportionment, estate account. (C3, C4, C5)
 29. **Resolve the theme question** — ⬇️ **absorbs the former P0 item 8; see G11 for why it was reclassified.** Either delete the 389 dead `themes/dashlite` module views, or commit to a real port: a root `themes/dashlite/` with `theme.json` and `views/layouts/master.blade.php` (without which nothing renders, since `core::layouts.master` currently resolves only from adminlte), plus the 157 adminlte-only view paths — 123 of them in Sacco alone. Building just the 10 chama views achieves nothing on its own. (C9, A8)
-30. **CI**: GitHub Actions running `composer install`, `php artisan migrate` against MySQL *and* the dump-then-migrate path, `phpunit`, static analysis, and `npm run build` for the USSD service. Rewrite the rotation test to run real migrations so schema drift is caught. (C10, D)
+30. **CI — partially delivered in this branch.** `.github/workflows/php-tests.yml` now runs `composer install`, the full migration chain against a fresh MySQL 8 database, and the complete discovered PHPUnit suite (application + module tests) on pull requests. Remaining: exercise the dump-then-migrate path, add static analysis/format checks and `npm run build` for the USSD service, and rewrite the rotation test to run real migrations so schema drift is caught. (C10, D)
 
 ### P3 — Hygiene
 31. Fix `modules_statuses.json` (`Nice`, duplicate `Share`/`Shares`); align `QUEUE_CONNECTION` defaults; add per-endpoint rate limits on auth and webhook routes; document the one-shot maintenance commands; remove the commented `penalties:process` line. (C8, D)
@@ -451,7 +451,7 @@ Three things need a human decision rather than more code:
 
 Also note that deploying G12 starts real SMS traffic and real per-message cost. Set `SACCO_SMS_TRANSACTION_ALERTS=false` at deploy if that is not wanted immediately.
 
-One caveat applies to everything above: **none of it has been executed.** There is no PHP runtime in this environment, so `phpunit` was never run and `composer` dependencies are not installed. See the verification note at the end of Part G for what was checked mechanically instead, and what must be run before merge.
+One caveat applies to local verification: **there is no PHP runtime in this environment**, so `phpunit` and Composer have not been run locally. This branch adds a GitHub Actions workflow that will run Composer install, the MySQL migration chain, and PHPUnit on the open PR; its check result must be reviewed before merge. See the verification note at the end of Part G for the mechanical checks done in this environment and the remaining CI scope.
 
 ---
 
@@ -528,7 +528,8 @@ The P0 items from Part F have been implemented. Each entry names the defect it c
 
 - `sacco-core/code/.gitignore` was **completely empty** — the reason `.env` was tracked. Populated with the standard Laravel 8 set; added `sacco-core/.gitignore` for the deployment env.
 - `sacco-core/.env`, `sacco-core/code/.env` and `code/.phpunit.result.cache` untracked via `git rm --cached`; files remain on disk.
-- Hardcoded production IP `149.102.129.28` removed from `docker-compose.yml`, `deploy.sh` and `.env.docker.example`. `DB_HOST`, `DB_USERNAME`, `DB_PASSWORD` now use `${VAR:?…}` so compose **fails fast** instead of silently defaulting to `ulm`/`ulm`. `deploy.sh` derives its printed URLs from a new `APP_HOST`.
+- Hardcoded production IP `149.102.129.28` removed from `docker-compose.yml`, `deploy.sh` and `.env.docker.example`. `DB_HOST`, `DB_USERNAME`, `DB_PASSWORD` now use `${VAR:?…}` so compose **fails fast** instead of silently defaulting to `ulm`/`ulm`. `deploy.sh` derives its printed URLs from a new `APP_HOST`. Residual uses remain in `sacco-core/run.sh` and `sacco-core/fix-permissions.sh` and are still to be removed.
+- `.env.example` still has placeholder `admin`/`password` values for both primary and legacy DB connections. They are not suitable for a deployment; Compose now requires explicit `DB_HOST`, `DB_USERNAME` and `DB_PASSWORD`, but the example file still needs a follow-up to make that posture consistent.
 
 > **⚠️ Before pulling this branch: back up your local `.env` files.**
 > The untracking commit records a *deletion* of `sacco-core/.env` and `sacco-core/code/.env`. `git rm --cached` keeps them on the machine that ran it, but any other clone that pulls or checks out this commit will have its local copies **deleted from the working tree** — including a deployment server. Copy both aside first, pull, then restore them. They are now gitignored, so they will stay untracked afterwards. (`deploy.sh` also self-heals by copying `.env.docker.example`, but that loses real credentials.)
@@ -607,10 +608,10 @@ Because the send is inline on money paths, three constraints are enforced:
 
 ### Verification status
 
-No PHP runtime is available in this environment (no `php`, no root for `apt`), so `phpunit` could not be executed and `composer` dependencies are not installed. Changes were verified by a string- and comment-aware brace/paren balance checker across all modified and added PHP files, by confirming every new symbol resolves (`GroupService` is same-namespace in `DataImportService`; `Carbon` import added; `Modules\User\Entities\User` path confirmed; `$today`/`$now`/`$errors`/`$userId` all in scope at the enrollment block), and by re-reading each call site.
+No PHP runtime is available in this environment (no `php`, no root for `apt`), so `phpunit` and Composer could not be executed locally. The new `.github/workflows/php-tests.yml` workflow is configured to run `composer install`, all migrations against MySQL 8, and PHPUnit for both `tests/` and `Modules/`; check the PR's GitHub Actions result before merge. It intentionally does not yet validate the legacy dump-then-migrate path or the USSD build. Changes were also checked here with a string- and comment-aware brace/paren balance checker across modified and added PHP files, by verifying new symbols and paths, and by re-reading each call site.
 
 Structural checks that were run mechanically, not by eye: every `permission:` string used in `GroupController` exists in `Modules/Sacco/Config/permissions.php`; all 23 `GroupController` actions are permission-gated with no phantom entries and none left unguarded; every `GroupController@method` referenced in `Routes/web.php` exists and every public method has a route; Blade `@if/@endif`, `@can/@endcan`, `@foreach/@endforeach`, `@php/@endphp` and `<section>/<div>/<table>/<form>` tags balance in every edited view; table header and body cell counts match; and no view, route or controller references any of the deleted orphan views.
 
-**These changes need `composer install && php artisan migrate && vendor/bin/phpunit` run against MySQL before merge.** The enum-widening migrations are the ones to watch, since they issue raw `ALTER … MODIFY` and are guarded to MySQL only.
+**The PR's MySQL/PHPUnit check must pass before merge.** Locally, the equivalent sequence is `composer install && php artisan migrate && vendor/bin/phpunit`. The enum-widening migrations are the ones to watch, since they issue raw `ALTER … MODIFY` and are guarded to MySQL only.
 
 One assumption worth confirming during review: `GuzzleHttp\json_decode` is still shipped by Guzzle 7.9.2 (deprecated, but present), so the existing import in `FlutterwaveController` is not a fatal error. The new webhook calls `\json_decode` explicitly anyway, because the Guzzle shim *throws* on malformed input where the global function returns `null` — a bad payload should answer 400, not 500.
